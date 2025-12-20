@@ -1,0 +1,46 @@
+{
+  "name": "adobe-launch-export-tool",
+  "version": "1.0.0",
+  "description": "Export rules, data elements, and extensions settings from your Data Collection Tags Property production library",
+  "main": "main.js",
+  "author": "Andy Lunsford <https://www.andylunsford.com>",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "type": "commonjs",
+  "build": {
+    "appId": "com.andylunsford.launch-export",
+    "productName": "Adobe Launch Export",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg"],
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Development"
+    }
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  }
+}

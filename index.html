@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Adobe Launch Export Tool</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            /* Light Theme Variables */
+            --bg-primary: #f4f7f6;
+            --bg-card: #ffffff;
+            --text-main: #2c3e50;
+            --text-muted: #7f8c8d;
+            --accent: #2680eb;
+            --accent-hover: #1e6ad4;
+            --border: #e0e0e0;
+            --input-bg: #ffffff;
+            --shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        [data-theme="dark"] {
+            /* Dark Theme Variables */
+            --bg-primary: #121212;
+            --bg-card: #1e1e1e;
+            --text-main: #e0e0e0;
+            --text-muted: #a0a0a0;
+            --accent: #4fa3ff;
+            --accent-hover: #6cb0ff;
+            --border: #333333;
+            --input-bg: #2d2d2d;
+            --shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            margin: 0;
+            padding: 40px;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        /* Layout & Typography */
+        h1, h2, h3 {
+            font-family: 'Poppins', sans-serif;
+            font-weight: 600;
+            margin-top: 0;
+        }
+        
+        h1 { font-size: 24px; margin-bottom: 5px; }
+        .subtitle { font-size: 14px; color: var(--text-muted); margin-bottom: 30px; }
+        
+        /* Header Container for Dark Mode Toggle */
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        /* Cards */
+        .section {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            transition: background-color 0.3s, border-color 0.3s;
+        }
+
+        .hidden { display: none !important; }
+
+        /* Minimalist Inputs */
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0 15px 0;
+            box-sizing: border-box;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background-color: var(--input-bg);
+            color: var(--text-main);
+            font-family: 'Roboto', sans-serif;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Flat Buttons */
+        button {
+            background-color: var(--accent);
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Poppins', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background-color 0.2s, transform 0.1s;
+            display: inline-block;
+        }
+
+        button:hover { background-color: var(--accent-hover); }
+        button:active { transform: translateY(1px); }
+
+        button.secondary {
+            background-color: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+        }
+        button.secondary:hover { background-color: rgba(128,128,128,0.1); }
+        
+        button.logout { background-color: #ff5f57; color: white; }
+        button.logout:hover { background-color: #d6453e; }
+
+        /* Checkboxes & Lists */
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            padding: 8px 0;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text-main);
+        }
+        
+        input[type="checkbox"] {
+            margin-right: 10px;
+            accent-color: var(--accent);
+            width: 16px;
+            height: 16px;
+        }
+
+        #property-list {
+            background-color: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        #login-status, #export-status {
+            margin-top: 15px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        /* Dark Mode Toggle Icon */
+        /* Update the .theme-toggle and add .icon-bulb styles */
+        .theme-toggle {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.2s;
+        }
+
+        .theme-toggle:hover { 
+            background-color: rgba(128,128,128,0.1); 
+        }
+
+        .theme-toggle svg { 
+            width: 24px; 
+            height: 24px; 
+        }
+
+        /* Default (Light Mode) = Black Bulb */
+        .icon-bulb {
+            fill: #2c3e50; 
+            transition: fill 0.3s ease;
+        }
+
+        /* Dark Mode = Yellow Bulb */
+        [data-theme="dark"] .icon-bulb {
+            fill: #f1c40f; /* Bright Yellow */
+            filter: drop-shadow(0 0 5px rgba(241, 196, 15, 0.5)); /* Optional: Slight glow */
+        }
+        /* Footer Credits */
+        .footer {
+            text-align: center;
+            margin-top: 40px; /* Push it down from content */
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 12px;
+            font-family: 'Poppins', sans-serif;
+        }
+
+        .footer a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+            cursor: pointer; /* Important for Electron */
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header-row">
+        <div>
+            <h1>Adobe Launch Export Tool</h1>
+            <div class="subtitle">Export rules, data elements, and extensions settings from your Data Collection Tags Property production library</div>
+        </div>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">
+            <svg class="icon-bulb" viewBox="0 0 24 24">
+            <path d="M9,21 C9,21.55 9.45,22 10,22 L14,22 C14.55,22 15,21.55 15,21 L15,20 L9,20 L9,21 Z M12,2 C8.14,2 5,5.14 5,9 C5,11.38 6.19,13.47 8,14.74 L8,17 C8,17.55 8.45,18 9,18 L15,18 C15.55,18 16,17.55 16,17 L16,14.74 C17.81,13.47 19,11.38 19,9 C19,5.14 15.86,2 12,2 Z"/>
+            </svg>
+        </button>
+    </div>
+
+    <div id="login-section" class="section">
+        <h3>Credentials</h3>
+        
+        <div id="login-form">
+            <input type="text" id="clientId" placeholder="Client ID">
+            <input type="password" id="clientSecret" placeholder="Client Secret">
+            <input type="text" id="orgId" placeholder="Org ID (e.g., 1234@AdobeOrg)">
+            <div style="margin-top: 10px;">
+                <button onclick="login()">Connect & Save</button>
+                <button id="cancel-edit-btn" class="secondary hidden" onclick="cancelEdit()">Cancel</button>
+            </div>
+        </div>
+
+        <div id="saved-creds-view" class="hidden">
+            <div style="display:flex; align-items:center; margin-bottom:15px;">
+                <span style="font-size: 24px; margin-right: 10px;">🔒</span> 
+                <span>Credentials securely stored on this machine.</span>
+            </div>
+            <button onclick="useSavedCreds()">Connect with Saved Creds</button>
+            <button class="secondary" onclick="enableEditMode()">Edit</button>
+            <button class="logout" onclick="clearCreds()" style="float: right;">Log Out</button>
+        </div>
+
+        <p id="login-status"></p>
+    </div>
+
+    <div id="company-section" class="section hidden">
+        <h3>Select Company</h3>
+        <select id="company-select"></select>
+        <button class="secondary" onclick="loadProperties()">Load Properties</button>
+    </div>
+
+    <div id="property-section" class="section hidden">
+        <h3>Select Properties</h3>
+        
+        <div class="checkbox-group" style="padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--border);">
+            <label style="font-weight: 600;">
+                <input type="checkbox" id="select-all-toggle" onchange="toggleSelectAll()"> 
+                Select All / None
+            </label>
+        </div>
+
+        <div id="property-list" class="checkbox-group"></div>
+        
+        <h3 style="margin-top: 25px;">Export Configuration</h3>
+        <div class="checkbox-group" style="margin-bottom: 20px;">
+            <label>
+                <input type="checkbox" id="opt-full-export" value="full" checked> 
+                <p><strong>Full Export </strong> (All Rules, Data Elements, Extensions from upstream in addition to latest library updates)</p>
+            </label>
+            <label>
+                <input type="checkbox" id="opt-library-export" value="library"> 
+                <p><strong>Latest Library </strong> (Only items in the latest Production library)</p>
+            </label>
+        </div>
+
+        <button onclick="startExportJob()" style="width: 100%; font-size: 16px;">Download Selected Items</button>
+        
+        <div id="export-status"></div>
+    </div>
+    
+    <div class="footer">
+        <p>Built by <a id="credit-link" href="https://www.andylunsford.com?utm_source=github&utm_medium=application&utm_campaign=github-tools">Andy Lunsford</a></p>
+    </div>
+
+    <script src="renderer.js"></script>
+
+    <script>
+        // Check localStorage for saved theme, default to light
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const target = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', target);
+            localStorage.setItem('theme', target);
+        }
+    </script>
+</body>
+</html>
