@@ -3,187 +3,278 @@ const { ipcRenderer, shell } = require('electron');
 let globalToken = null;
 let currentCreds = {};
 
-window.addEventListener('DOMContentLoaded', async () => {
-    await checkSavedState();
-});
-
-document.addEventListener('DOMContentLoaded', () => {
-    // 1. Existing Theme Check
-    checkSavedState();
-
-    // 2. Handle External Link Clicks
+// --- INITIALIZATION ---
+document.addEventListener('DOMContentLoaded', async () => {
+    // 1. Footer Link
     const link = document.getElementById('credit-link');
-    if (link) {
-        link.addEventListener('click', (e) => {
-            e.preventDefault(); // Stop app from navigating
-            shell.openExternal(link.href); // Open in Chrome/Safari/Edge
-        });
+    if (link) link.addEventListener('click', (e) => { e.preventDefault(); shell.openExternal(link.href); });
+
+    // 2. Load Saved Config
+    try {
+        const savedConfig = await ipcRenderer.invoke('get-saved-config');
+        
+        // 3. Auto-Login if Creds exist
+        if (savedConfig.credentials && savedConfig.credentials.client_id) {
+            document.getElementById('clientId').value = savedConfig.credentials.client_id;
+            document.getElementById('clientSecret').value = savedConfig.credentials.client_secret || "";
+            document.getElementById('orgId').value = savedConfig.credentials.organization_id;
+            
+            // Attempt Silent Login
+            await loginAndSave(true);
+
+            // 4. Auto-Load Company if Saved
+            if (savedConfig.company_id && globalToken) {
+                // Pre-select the company in the dropdown (visual only)
+                const select = document.getElementById('company-select');
+                if(select) select.value = savedConfig.company_id;
+
+                // Load properties immediately
+                await loadProperties(savedConfig.company_id);
+                document.getElementById('main-interface').classList.remove('hidden');
+            } else {
+                if(globalToken) togglePanel('company-panel');
+            }
+        } else {
+            togglePanel('creds-panel');
+        }
+    } catch (e) {
+        console.error("Init failed:", e);
+        togglePanel('creds-panel');
     }
 });
 
-async function checkSavedState() {
-    const hasCreds = await ipcRenderer.invoke('check-stored-creds');
+// --- UI HELPERS ---
+
+function togglePanel(id) {
+    const el = document.getElementById(id);
+    if(el) el.classList.toggle('hidden');
+}
+
+function showLoading(msg = "Loading...") {
+    const overlay = document.getElementById('loading-overlay');
+    const text = document.getElementById('loading-text');
+    if(text) text.innerText = msg;
+    if(overlay) overlay.classList.remove('hidden');
+}
+
+function hideLoading() {
+    const overlay = document.getElementById('loading-overlay');
+    if(overlay) overlay.classList.add('hidden');
+}
+
+function switchTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
     
-    if (hasCreds) {
-        // Show "Saved" UI, Hide "Form" UI
-        document.getElementById('saved-creds-view').classList.remove('hidden');
-        document.getElementById('login-form').classList.add('hidden');
-    } else {
-        // Show "Form" UI
-        document.getElementById('saved-creds-view').classList.add('hidden');
-        document.getElementById('login-form').classList.remove('hidden');
-    }
+    document.getElementById(tabId).classList.add('active');
+    // Find the button that calls this function and make it active
+    const btn = document.querySelector(`button[onclick="switchTab('${tabId}')"]`);
+    if(btn) btn.classList.add('active');
 }
 
-function enableEditMode() {
-    // Show form, but keep "Cancel" button visible in case they didn't mean to
-    document.getElementById('saved-creds-view').classList.add('hidden');
-    document.getElementById('login-form').classList.remove('hidden');
-    document.getElementById('cancel-edit-btn').classList.remove('hidden');
+function toggleSelectAll() {
+    const val = document.getElementById('select-all-toggle').checked;
+    document.querySelectorAll('.prop-check').forEach(cb => cb.checked = val);
 }
 
-function cancelEdit() {
-    checkSavedState(); // Revert UI
-}
+// --- CORE LOGIC ---
 
-async function clearCreds() {
-    await ipcRenderer.invoke('clear-creds');
-    currentCreds = {};
-    globalToken = null;
-    document.getElementById('login-status').innerText = "Logged out.";
-    checkSavedState();
-}
+async function loginAndSave(silent = false) {
+    if(!silent) showLoading("Authenticating...");
 
-async function useSavedCreds() {
-    const creds = await ipcRenderer.invoke('get-stored-creds');
-    if (creds) {
-        // Populate the fields internally (or just pass to login)
-        document.getElementById('clientId').value = creds.client_id;
-        document.getElementById('clientSecret').value = creds.client_secret; // Decrypted!
-        document.getElementById('orgId').value = creds.organization_id;
-        
-        // Auto-login
-        login();
-    }
-}
+    try {
+        currentCreds = {
+            client_id: document.getElementById('clientId').value.trim(),
+            client_secret: document.getElementById('clientSecret').value.trim(),
+            organization_id: document.getElementById('orgId').value.trim(),
+            scope: "openid,AdobeID,additional_info.projectedProductContext,read_organizations,reactor.read,reactor.write",
+            ims_endpoint: "https://ims-na1.adobelogin.com"
+        };
 
-async function login() {
-    currentCreds = {
-        client_id: document.getElementById('clientId').value,
-        client_secret: document.getElementById('clientSecret').value,
-        organization_id: document.getElementById('orgId').value,
-        scope: "openid,AdobeID,additional_info.projectedProductContext,read_organizations,reactor.read,reactor.write", 
-        ims_endpoint: "https://ims-na1.adobelogin.com"
-    };
+        const result = await ipcRenderer.invoke('adobe-login', currentCreds);
 
-    const result = await ipcRenderer.invoke('adobe-login', currentCreds);
-    
-    if (result.success) {
-        globalToken = result.token;
-        document.getElementById('login-status').innerText = "✅ Connected!";
-        
-        // Refresh UI to show "Saved" state since adobe-login saves creds now
-        checkSavedState(); 
-        loadCompanies();
-    } else {
-        document.getElementById('login-status').innerText = "❌ Error: " + result.error;
+        if (result.success) {
+            globalToken = result.token;
+            
+            // [FIX] Await the company load so we catch errors here
+            await loadCompanies(); 
+
+            if (!silent) {
+                document.getElementById('login-status').innerText = "✅ Connected!";
+                setTimeout(() => {
+                    // Close creds, open company selection
+                    const credsPanel = document.getElementById('creds-panel');
+                    if(!credsPanel.classList.contains('hidden')) togglePanel('creds-panel');
+                    
+                    const companyPanel = document.getElementById('company-panel');
+                    if(companyPanel.classList.contains('hidden')) togglePanel('company-panel');
+                }, 500);
+            }
+        } else {
+            if(!silent) document.getElementById('login-status').innerText = "❌ Error: " + result.error;
+        }
+    } catch (e) {
+        console.error("Login Error:", e);
+        if(!silent) document.getElementById('login-status').innerText = "❌ Exception: " + e.message;
+    } finally {
+        if(!silent) hideLoading(); // [FIX] Spinner ALWAYS turns off
     }
 }
 
 async function loadCompanies() {
-    const companies = await ipcRenderer.invoke('get-companies', { token: globalToken, creds: currentCreds });
-    const select = document.getElementById('company-select');
-    
-    companies.forEach(comp => {
-        const opt = document.createElement('option');
-        opt.value = comp.id;
-        opt.innerText = comp.attributes.name;
-        select.appendChild(opt);
-    });
-
-    document.getElementById('company-section').classList.remove('hidden');
+    try {
+        const companies = await ipcRenderer.invoke('get-companies', { token: globalToken, creds: currentCreds });
+        
+        const select = document.getElementById('company-select');
+        select.innerHTML = '<option value="">Select a Company...</option>';
+        
+        // [FIX] Safety check to ensure companies is actually an array
+        if (Array.isArray(companies)) {
+            companies.forEach(comp => {
+                const opt = document.createElement('option');
+                opt.value = comp.id;
+                opt.innerText = comp.attributes.name;
+                select.appendChild(opt);
+            });
+        } else {
+            console.error("Companies API returned unexpected format:", companies);
+        }
+    } catch (e) {
+        console.error("Failed to load companies:", e);
+        // Don't alert here if silent login, just log it
+    }
 }
 
-async function loadProperties() {
+async function saveCompanySelection() {
     const companyId = document.getElementById('company-select').value;
-    const properties = await ipcRenderer.invoke('get-properties', { token: globalToken, creds: currentCreds, companyId });
-    
-    const list = document.getElementById('property-list');
-    list.innerHTML = '';
-    
-    // Reset Select All
-    document.getElementById('select-all-toggle').checked = false;
-
-    properties.forEach(prop => {
-        const div = document.createElement('div');
-        div.style.padding = "2px 0";
-        div.innerHTML = `<label><input type="checkbox" value="${prop.id}" data-name="${prop.attributes.name}" class="prop-check"> ${prop.attributes.name} (${prop.id})</label>`;
-        list.appendChild(div);
-    });
-
-    document.getElementById('property-section').classList.remove('hidden');
-}
-
-function toggleSelectAll() {
-    const master = document.getElementById('select-all-toggle');
-    const checkboxes = document.querySelectorAll('.prop-check');
-    checkboxes.forEach(cb => cb.checked = master.checked);
-}
-
-async function startExportJob() {
-    // 1. Get Selected Properties
-    const propCheckboxes = document.querySelectorAll('.prop-check:checked');
-    if (propCheckboxes.length === 0) {
-        alert("Please select at least one property.");
+    if(!companyId) {
+        alert("Please select a company.");
         return;
     }
 
-    // 2. Get Selected Export Modes
+    try {
+        // Save to persistence
+        await ipcRenderer.invoke('save-config-field', { key: 'company_id', value: companyId });
+        
+        // Load Properties (Handles its own loading spinner)
+        await loadProperties(companyId);
+        
+        // Update UI
+        togglePanel('company-panel');
+        document.getElementById('main-interface').classList.remove('hidden');
+    } catch (e) {
+        alert("Failed to save company: " + e.message);
+    }
+}
+
+async function loadProperties(companyId) {
+    showLoading("Fetching Properties...");
+    
+    try {
+        const properties = await ipcRenderer.invoke('get-properties', { token: globalToken, creds: currentCreds, companyId });
+        
+        // Populate Tab 1 List (Grid Layout)
+        const list = document.getElementById('property-list');
+        list.innerHTML = '';
+        
+        if (Array.isArray(properties)) {
+            properties.forEach(prop => {
+                const label = document.createElement('label');
+                label.className = 'prop-item'; 
+                label.innerHTML = `
+                    <input type="checkbox" value="${prop.id}" data-name="${prop.attributes.name}" class="prop-check"> 
+                    <span class="prop-name" title="${prop.attributes.name}">${prop.attributes.name}</span>
+                `;
+                list.appendChild(label);
+            });
+
+            // Populate Tab 2 Dropdown
+            const compareSelect = document.getElementById('compare-prop-select');
+            compareSelect.innerHTML = '<option value="">Select Property...</option>';
+            properties.forEach(prop => {
+                const opt = document.createElement('option');
+                opt.value = prop.id;
+                opt.innerText = prop.attributes.name;
+                compareSelect.appendChild(opt);
+            });
+        } else {
+            throw new Error("No properties found or API error.");
+        }
+
+    } catch (e) {
+        alert("Error loading properties: " + e.message);
+    } finally {
+        hideLoading(); // [FIX] Spinner ALWAYS turns off
+    }
+}
+
+// [NEW] Logic for Tab 2
+async function loadLibrariesForCompare() {
+    const propertyId = document.getElementById('compare-prop-select').value;
+    if(!propertyId) return;
+
+    showLoading("Fetching Libraries...");
+    try {
+        const libraries = await ipcRenderer.invoke('get-libraries', { token: globalToken, creds: currentCreds, propertyId });
+        
+        const fill = (id) => {
+            const sel = document.getElementById(id);
+            sel.innerHTML = '';
+            if (Array.isArray(libraries)) {
+                libraries.forEach(lib => {
+                    const opt = document.createElement('option');
+                    opt.value = lib.id;
+                    opt.innerText = lib.attributes.name;
+                    sel.appendChild(opt);
+                });
+            }
+        };
+
+        fill('lib-a-select');
+        fill('lib-b-select');
+    } catch(e) {
+        alert("Error fetching libraries: " + e.message);
+    } finally {
+        hideLoading();
+    }
+}
+
+async function startExportJob() {
+    const propCheckboxes = document.querySelectorAll('.prop-check:checked');
+    const statusDiv = document.getElementById('export-status');
+    
+    if (propCheckboxes.length === 0) return alert("Select at least one property.");
+    
     const types = [];
     if (document.getElementById('opt-full-export').checked) types.push('full');
     if (document.getElementById('opt-library-export').checked) types.push('library');
 
-    if (types.length === 0) {
-        alert("Please select at least one Export Configuration (Full or Library).");
-        return;
-    }
+    if (types.length === 0) return alert("Select at least one export type.");
 
-    // 3. Prepare Data
     const selectedProps = Array.from(propCheckboxes).map(cb => ({
-        id: cb.value,
-        name: cb.getAttribute('data-name') 
+        id: cb.value, name: cb.getAttribute('data-name') 
     }));
 
-    const statusDiv = document.getElementById('export-status');
-    statusDiv.style.color = "var(--text-main)"; // Ensure visible color
-    statusDiv.innerText = "Initializing export job...";
-
-    // [NEW] Listen for progress updates from Main Process
-    // We define the listener function so we can remove it later
-    const progressListener = (event, message) => {
-        statusDiv.innerText = message;
+    // Listener
+    const progressListener = (event, message) => { 
+        // Also update the loading spinner text if it's visible, or the status div
+        if(!document.getElementById('loading-overlay').classList.contains('hidden')) {
+             document.getElementById('loading-text').innerText = message;
+        }
+        statusDiv.innerText = message; 
     };
     ipcRenderer.on('export-progress', progressListener);
 
+    showLoading("Initializing Export...");
+
     try {
-        // 4. Send to Backend
-        const result = await ipcRenderer.invoke('perform-export', { 
-            types, 
-            properties: selectedProps,
-            token: globalToken,
-            creds: currentCreds
-        });
-
-        // 5. Job Done
-        statusDiv.innerText = result;
-        statusDiv.style.color = "green"; // Optional success color
+        const result = await ipcRenderer.invoke('perform-export', { types, properties: selectedProps, token: globalToken, creds: currentCreds });
         alert(result);
-
-    } catch (error) {
-        statusDiv.innerText = "Error: " + error.message;
-        statusDiv.style.color = "red";
+        statusDiv.innerText = "Done.";
+    } catch (e) {
+        alert("Export failed: " + e.message);
     } finally {
-        // [IMPORTANT] Clean up listener to prevent duplicates next time
         ipcRenderer.removeListener('export-progress', progressListener);
+        hideLoading();
     }
 }
