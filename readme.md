@@ -75,6 +75,13 @@ This application communicates directly with `reactor.adobe.io` via credentials s
 * **Never** sent to any third-party server.
 * **Only** used to obtain an access token from Adobe IMS.
 
+## Future Updates / To-Do
+* Allow for selection of specific builds / libraries to pull-down (or allow for export of all builds)
+* Add better support for duplicate rule names / data elements (just because you shouldn't do it, doesn't mean that there likely aren't a lot of properties that do that TBH I haven't tested what happens when they are found)
+* Allow for generating release notes based on diffing last production to current production
+* Opportunities to generate diffs automatically when selecting two libraries (dependent on library selection option)
+* TBD
+
 ## 🤝 Contributing
 Built by [Andy Lunsford](https://www.andylunsford.com).
 
