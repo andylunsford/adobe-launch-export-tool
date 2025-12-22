@@ -9,7 +9,7 @@ Designed for Implementation and Analytics professionals who need to audit implem
 
 ## 🚀 Features
 
-* **Full Property Export:** Downloads all Rules, Data Elements, and Extensions for a property as renders in production including upstream changes.
+* **Full Property Export:** Downloads all Rules, Data Elements, and Extensions for a property as rendered in production including upstream changes.
 * **Library Export:** Can also grab the latest *Production* library and export only the rules / data elements / extensions modified in that build.
 * **Smart Rule Organization:** Automatically breaks down Rule Components into `events`, `conditions`, and `actions` folders for easier diffing and auditing.
 * **Bulk Actions:** Select one or many properties across your organization and export them in a single batch job.
@@ -46,7 +46,7 @@ If you prefer to run the code directly or contribute:
 
 1.  **Credentials:**
     * Obtain an **Adobe I/O Integration** (Oauth Server-to-Server) from [Adobe Developer Console](https://console.adobe.io/).
-    * Ensure the integration has access to **Experience Platform Launch API**.
+    * Ensure the integration has access to **Experience Platform Launch API** (not the "Experience Platform API" as that is a separate API, and it will not let you access reactor API which is needed).
     * Enter your `Client ID`, `Client Secret`, and `Org ID` into the tool.
     * *Note: Credentials are encrypted and stored locally on your machine.*
 
@@ -59,15 +59,25 @@ If you prefer to run the code directly or contribute:
     ```text
     /Export Folder
       /Property Name
-        /Full Export
+        /Full Export (for 'Full Export' selection)
           /rules
             /Rule Name
               /events
               /conditions
               /actions
               settings.json
-          /data_elements
-          /extensions
+           /data_elements
+           /extensions
+        /Library Export (for "Library Export' selection)
+          /<library name>    
+            /rules
+              /Rule Name
+                /events
+                /conditions
+                /actions
+                  settings.json
+              /data_elements
+              /extensions
     ```
 
 ## 🔒 Security Note
