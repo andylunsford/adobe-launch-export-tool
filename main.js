@@ -56,7 +56,7 @@ function loadVariables() {
                         const buffer = Buffer.from(data.credentials.client_secret, 'base64');
                         data.credentials.client_secret = safeStorage.decryptString(buffer);
                     } catch (e) {
-                        data.credentials = {}; 
+                        data.credentials = {};
                     }
                 }
             }
@@ -89,13 +89,13 @@ ipcMain.handle('adobe-login', async (event, creds) => {
                 client_secret: creds.client_secret,
                 scope: creds.scope
             },
-            httpsAgent: proxyAgent 
+            httpsAgent: proxyAgent
         });
-        
+
         const vars = loadVariables();
         vars.credentials = creds;
         saveVariables(vars);
-        
+
         return { success: true, token: response.data.access_token };
     } catch (error) {
         return { success: false, error: error.message };
@@ -140,6 +140,205 @@ ipcMain.handle('get-libraries', async (event, { token, creds, propertyId }) => {
     return response.data.data;
 });
 
+ipcMain.handle('get-environments', async (event, { token, creds, propertyId }) => {
+    const response = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/environments`, {
+        headers: {
+            "Authorization": `Bearer ${token}`,
+            "x-api-key": creds.client_id,
+            "x-gw-ims-org-id": creds.organization_id,
+            "Accept": "application/vnd.api+json;revision=1"
+        },
+        httpsAgent: proxyAgent
+    });
+    return response.data.data;
+});
+
+ipcMain.handle('get-environment-library', async (event, { token, creds, environmentId }) => {
+    try {
+        const headers = {
+            "Authorization": `Bearer ${token}`,
+            "x-api-key": creds.client_id,
+            "x-gw-ims-org-id": creds.organization_id,
+            "Accept": "application/vnd.api+json;revision=1"
+        };
+
+        // Get the latest build for this environment
+        const buildRes = await axios.get(`https://reactor.adobe.io/environments/${environmentId}/builds?page[size]=1`, {
+            headers,
+            httpsAgent: proxyAgent
+        });
+
+        if (buildRes.data.data && buildRes.data.data.length > 0) {
+            const latestBuild = buildRes.data.data[0];
+            const libraryId = latestBuild.relationships.library.data.id;
+
+            // Get the library details
+            const libRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}`, {
+                headers,
+                httpsAgent: proxyAgent
+            });
+
+            return {
+                libraryId: libraryId,
+                libraryName: libRes.data.data.attributes.name,
+                buildDate: latestBuild.attributes.updated_at
+            };
+        }
+
+        return null; // No builds found
+    } catch (error) {
+        console.error('Error fetching environment library:', error.message);
+        return null;
+    }
+});
+
+ipcMain.handle('perform-environment-comparison', async (event, { token, creds, envAId, envBId }) => {
+    try {
+        const headers = {
+            "Authorization": `Bearer ${token}`,
+            "x-api-key": creds.client_id,
+            "x-gw-ims-org-id": creds.organization_id,
+            "Accept": "application/vnd.api+json;revision=1"
+        };
+
+        // Helper function to fetch all pages of data from an endpoint
+        async function fetchAllPages(url, headers) {
+            let allData = [];
+            let currentUrl = url;
+
+            while (currentUrl) {
+                const response = await axios.get(currentUrl, { headers, httpsAgent: proxyAgent });
+                allData = allData.concat(response.data.data || []);
+
+                // Check if there's a next page
+                const links = response.data.links;
+                currentUrl = links && links.next ? links.next : null;
+            }
+
+            return allData;
+        }
+
+        // Helper function to fetch build data for an environment
+        async function fetchEnvironmentData(environmentId) {
+            // Get the latest build
+            const buildRes = await axios.get(`https://reactor.adobe.io/environments/${environmentId}/builds?page[size]=1`, {
+                headers,
+                httpsAgent: proxyAgent
+            });
+
+            if (!buildRes.data.data || buildRes.data.data.length === 0) {
+                return { rules: [], data_elements: [], extensions: [], buildId: null };
+            }
+
+            const latestBuild = buildRes.data.data[0];
+            const buildId = latestBuild.id;
+
+            // Fetch ALL rules, data_elements, and extensions for this BUILD with pagination
+            // This gives us the actual deployed revisions
+            const [rules, data_elements, extensions] = await Promise.all([
+                fetchAllPages(`https://reactor.adobe.io/builds/${buildId}/rules`, headers),
+                fetchAllPages(`https://reactor.adobe.io/builds/${buildId}/data_elements`, headers),
+                fetchAllPages(`https://reactor.adobe.io/builds/${buildId}/extensions`, headers)
+            ]);
+
+            return {
+                buildId: buildId,
+                rules: rules,
+                data_elements: data_elements,
+                extensions: extensions
+            };
+        }
+
+        // Fetch data for both environments
+        const [envAData, envBData] = await Promise.all([
+            fetchEnvironmentData(envAId),
+            fetchEnvironmentData(envBId)
+        ]);
+
+        // Helper function to compare arrays of items
+        function compareItems(itemsA, itemsB, itemType) {
+            // Use origin ID as the stable identifier (falls back to item.id if no origin)
+            // This ensures that renamed/modified items are properly matched across builds
+            const getStableId = (item) => {
+                return item.relationships?.origin?.data?.id || item.id;
+            };
+
+            const mapA = new Map(itemsA.map(item => [getStableId(item), item]));
+            const mapB = new Map(itemsB.map(item => [getStableId(item), item]));
+
+            const onlyInA = [];
+            const onlyInB = [];
+            const modified = [];
+            const identical = [];
+
+            // Check items in A - using origin ID as source of truth
+            for (const [stableId, itemA] of mapA) {
+                if (!mapB.has(stableId)) {
+                    // Item exists in A but not in B
+                    onlyInA.push({
+                        id: itemA.id,
+                        name: itemA.attributes.name,
+                        revisionNumber: itemA.attributes.revision_number
+                    });
+                } else {
+                    const itemB = mapB.get(stableId);
+                    // Compare by checking if settings are different
+                    const settingsA = JSON.stringify(itemA.attributes);
+                    const settingsB = JSON.stringify(itemB.attributes);
+
+                    if (settingsA !== settingsB) {
+                        // Item modified - show both old and new names if renamed
+                        const nameA = itemA.attributes.name;
+                        const nameB = itemB.attributes.name;
+                        const displayName = nameA !== nameB ? `${nameA} → ${nameB}` : nameB;
+                        modified.push({
+                            id: itemB.id,
+                            name: displayName,
+                            oldName: nameA,
+                            newName: nameB,
+                            revisionNumberA: itemA.attributes.revision_number,
+                            revisionNumberB: itemB.attributes.revision_number
+                        });
+                    } else {
+                        // Item is identical
+                        identical.push({
+                            id: itemA.id,
+                            name: itemA.attributes.name,
+                            revisionNumber: itemA.attributes.revision_number
+                        });
+                    }
+                }
+            }
+
+            // Check items only in B
+            for (const [stableId, itemB] of mapB) {
+                if (!mapA.has(stableId)) {
+                    // Item exists in B but not in A
+                    onlyInB.push({
+                        id: itemB.id,
+                        name: itemB.attributes.name,
+                        revisionNumber: itemB.attributes.revision_number
+                    });
+                }
+            }
+
+            return { onlyInA, onlyInB, modified, identical };
+        }
+
+        // Compare each type
+        const comparison = {
+            rules: compareItems(envAData.rules, envBData.rules, 'rules'),
+            data_elements: compareItems(envAData.data_elements, envBData.data_elements, 'data_elements'),
+            extensions: compareItems(envAData.extensions, envBData.extensions, 'extensions')
+        };
+
+        return comparison;
+    } catch (error) {
+        console.error('Comparison error:', error);
+        throw new Error(`Failed to compare environments: ${error.message}`);
+    }
+});
+
 // --- EXPORT LOGIC (Fixed: Removed Error Swallowing) ---
 
 ipcMain.handle('perform-export', async (event, args) => {
@@ -167,9 +366,9 @@ ipcMain.handle('perform-export', async (event, args) => {
         for (let i = 0; i < properties.length; i++) {
             const prop = properties[i];
             const propSafeName = sanitizeFolderName(prop.name);
-            
+
             sendStatus(`Processing ${prop.name} (${i + 1}/${properties.length})...`);
-            
+
             // --- OPTION 1: Full Export ---
             if (types.includes('full')) {
                 const targetDir = path.join(baseDir, propSafeName, "Full Export");
@@ -189,7 +388,7 @@ ipcMain.handle('perform-export', async (event, args) => {
             // --- OPTION 2: Library Export ---
             if (types.includes('library')) {
                 sendStatus(`Locating Production Library for ${prop.name}...`);
-                
+
                 // Fetch Env -> Build -> Library flow
                 const envRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/environments`, { headers, httpsAgent: proxyAgent });
                 const prodEnv = envRes.data.data.find(e => e.attributes.stage === 'production');
@@ -202,7 +401,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                         builds.sort((a, b) => new Date(b.attributes.updated_at) - new Date(a.attributes.updated_at));
                         const latestBuild = builds[0];
                         const libraryId = latestBuild.relationships.library.data.id;
-                        
+
                         // Get Library Name
                         const libRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}`, { headers, httpsAgent: proxyAgent });
                         const libraryName = libRes.data.data.attributes.name;
