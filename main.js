@@ -295,8 +295,9 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                     // Item exists in A but not in B
                     onlyInA.push({
                         id: itemA.id,
-                        name: itemA.attributes.name,
-                        revisionNumber: itemA.attributes.revision_number
+                        name: itemA.attributes.name || itemA.attributes.display_name,
+                        revisionNumber: itemA.attributes.revision_number,
+                        item: itemA
                     });
                 } else {
                     const itemB = mapB.get(stableId);
@@ -310,8 +311,8 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
 
                     if (settingsA !== settingsB || componentsA !== componentsB) {
                         // Item modified - show both old and new names if renamed
-                        const nameA = itemA.attributes.name;
-                        const nameB = itemB.attributes.name;
+                        const nameA = itemA.attributes.name || itemA.attributes.display_name;
+                        const nameB = itemB.attributes.name || itemB.attributes.display_name;
                         const displayName = nameA !== nameB ? `${nameA} → ${nameB}` : nameB;
 
                         // Create detailed diff of attributes
@@ -379,11 +380,17 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                                     const settingsCompA = stringifyAttributes(compA.attributes);
                                     const settingsCompB = stringifyAttributes(compB.attributes);
 
-                                    if (settingsCompA !== settingsCompB) {
+                                    const nameA = compA.attributes.name || compA.attributes.delegate_descriptor_id;
+                                    const nameB = compB.attributes.name || compB.attributes.delegate_descriptor_id;
+                                    const renamed = nameA !== nameB;
+
+                                    if (settingsCompA !== settingsCompB || renamed) {
                                         componentDiffs.push({
                                             type: 'modified',
                                             componentType: compB.attributes.delegate_descriptor_id,
-                                            name: compB.attributes.name || compB.attributes.delegate_descriptor_id,
+                                            name: nameB,
+                                            oldName: renamed ? nameA : null,
+                                            newName: renamed ? nameB : null,
                                             componentA: compA,
                                             componentB: compB
                                         });
@@ -421,8 +428,9 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                     // Item exists in B but not in A
                     onlyInB.push({
                         id: itemB.id,
-                        name: itemB.attributes.name,
-                        revisionNumber: itemB.attributes.revision_number
+                        name: itemB.attributes.name || itemB.attributes.display_name,
+                        revisionNumber: itemB.attributes.revision_number,
+                        item: itemB // Store full item for detailed view
                     });
                 }
             }

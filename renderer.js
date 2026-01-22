@@ -447,119 +447,58 @@ function displayComparisonResults(comparison) {
                         // Add component diffs if present (for rules)
                         // Add component diffs if present (for rules)
                         if (item.componentDiffs && item.componentDiffs.length > 0) {
-                            // Helper to render a component diff item
-                            const renderComponentDiff = (compDiff) => {
-                                const compDiffItem = document.createElement('div');
-                                compDiffItem.style.marginBottom = '8px';
-                                compDiffItem.style.paddingBottom = '8px';
-                                compDiffItem.style.borderBottom = '1px solid var(--border)';
-
-                                const compName = document.createElement('div');
-                                compName.style.fontWeight = '600';
-                                compName.style.marginBottom = '4px';
-
-                                // Get friendly name for extension/delegate
-                                const extName = extensionMapping.getFriendlyName(compDiff.componentType);
-                                const typeName = extensionMapping.getFriendlyComponentType(compDiff.componentType);
-
-                                // Construct display name: [Extension] Component Type: User Name
-                                // If typeName is same as user name (or empty), logic might adjust, but basic format:
-                                let displayName = `[${extName}]`;
-                                if (typeName && typeName !== compDiff.name) {
-                                    displayName += ` ${typeName}:`;
-                                }
-                                displayName += ` ${compDiff.name}`;
-
-                                if (compDiff.type === 'added') {
-                                    compName.style.color = '#2ecc71';
-                                    compName.innerText = `+ Added: ${displayName}`;
-                                    compDiffItem.appendChild(compName);
-                                } else if (compDiff.type === 'removed') {
-                                    compName.style.color = '#e74c3c';
-                                    compName.innerText = `- Removed: ${displayName}`;
-                                    compDiffItem.appendChild(compName);
-                                } else if (compDiff.type === 'modified') {
-                                    compName.style.color = '#f39c12';
-                                    compName.style.cursor = 'pointer';
-                                    compName.innerHTML = `~ Modified: ${displayName} <span style="font-size: 10px">▼</span>`;
-                                    compDiffItem.appendChild(compName);
-
-                                    // settings diff container
-                                    const settingsDiffDiv = document.createElement('div');
-                                    settingsDiffDiv.style.display = 'none';
-                                    settingsDiffDiv.style.marginTop = '5px';
-                                    settingsDiffDiv.style.padding = '8px';
-                                    settingsDiffDiv.style.backgroundColor = '#2c3e50'; // Darker bg for code
-                                    settingsDiffDiv.style.color = '#ecf0f1';
-                                    settingsDiffDiv.style.fontFamily = 'Menlo, Monaco, Consolas, monospace';
-                                    settingsDiffDiv.style.whiteSpace = 'pre-wrap';
-                                    settingsDiffDiv.style.borderRadius = '4px';
-                                    settingsDiffDiv.style.fontSize = '11px';
-
-                                    // Toggle visibility on click
-                                    compName.onclick = (e) => {
-                                        e.stopPropagation(); // Prevent bubbling to parent
-                                        if (settingsDiffDiv.style.display === 'none') {
-                                            settingsDiffDiv.style.display = 'block';
-                                            compName.innerHTML = `~ Modified: ${displayName} <span style="font-size: 10px">▲</span>`;
-
-                                            // Render settings diff if not already done
-                                            if (settingsDiffDiv.innerHTML === '') {
-                                                const settingsA = compDiff.componentA.attributes.settings;
-                                                const settingsB = compDiff.componentB.attributes.settings;
-
-                                                // Try to parse JSON settings if possible
-                                                let parsedA = settingsA;
-                                                let parsedB = settingsB;
-
-                                                try {
-                                                    if (typeof settingsA === 'string') parsedA = JSON.parse(settingsA);
-                                                    if (typeof settingsB === 'string') parsedB = JSON.parse(settingsB);
-                                                } catch (e) { /* keep as string if parse fails */ }
-
-                                                settingsDiffDiv.innerHTML = formatSettingsDiff(parsedA, parsedB);
-                                            }
-                                        } else {
-                                            settingsDiffDiv.style.display = 'none';
-                                            compName.innerHTML = `~ Modified: ${displayName} <span style="font-size: 10px">▼</span>`;
-                                        }
-                                    };
-
-                                    compDiffItem.appendChild(settingsDiffDiv);
-                                }
-                                return compDiffItem;
-                            };
-
                             // Group by type (Events, Conditions, Actions)
                             const events = item.componentDiffs.filter(d => extensionMapping.getComponentType(d.componentType) === 'events');
                             const conditions = item.componentDiffs.filter(d => extensionMapping.getComponentType(d.componentType) === 'conditions');
                             const actions = item.componentDiffs.filter(d => extensionMapping.getComponentType(d.componentType) === 'actions');
-                            const others = item.componentDiffs.filter(d => extensionMapping.getComponentType(d.componentType) === 'unknown');
+                            const others = item.componentDiffs.filter(d => !['events', 'conditions', 'actions'].includes(extensionMapping.getComponentType(d.componentType)));
 
                             // Helper to append section
                             const appendSection = (title, items) => {
-                                if (items.length > 0) {
-                                    const header = document.createElement('div');
-                                    header.style.fontWeight = '700';
-                                    header.style.marginTop = '12px';
-                                    header.style.marginBottom = '8px';
-                                    header.style.fontSize = '13px';
-                                    header.style.color = '#34495e';
-                                    header.style.borderBottom = '1px solid #bdc3c7';
-                                    header.innerText = title;
-                                    diffDetailsDiv.appendChild(header);
+                                // Always show header
+                                const header = document.createElement('div');
+                                header.style.fontWeight = '700';
+                                header.style.marginTop = '12px';
+                                header.style.marginBottom = '8px';
+                                header.style.fontSize = '13px';
+                                header.style.color = '#34495e';
+                                header.style.borderBottom = '1px solid #bdc3c7';
+                                header.innerText = title;
+                                diffDetailsDiv.appendChild(header);
 
-                                    items.forEach(d => diffDetailsDiv.appendChild(renderComponentDiff(d)));
+                                if (items.length > 0) {
+                                    items.forEach(d => diffDetailsDiv.appendChild(renderDetailedItemView(d)));
+                                } else {
+                                    const noChanges = document.createElement('div');
+                                    noChanges.style.fontStyle = 'italic';
+                                    noChanges.style.color = '#7f8c8d';
+                                    noChanges.style.marginLeft = '10px';
+                                    noChanges.style.marginBottom = '8px';
+                                    noChanges.innerText = '✓ No Changes';
+                                    diffDetailsDiv.appendChild(noChanges);
                                 }
                             };
 
                             appendSection('Events (Trigger Rules)', events);
                             appendSection('Conditions (If)', conditions);
                             appendSection('Actions (Then)', actions);
-                            appendSection('Other Components', others);
+                            if (others.length > 0) {
+                                appendSection('Other Components', others);
+                            }
                         }
 
                         section.appendChild(diffDetailsDiv);
+                    } else if (title === 'Data Elements' && (cat.key === 'added' || cat.key === 'removed')) {
+                        // Use renderDetailedItemView for top-level Data Element
+                        const diffObj = {
+                            type: cat.key,
+                            name: item.name,
+                            component: item.item, // Passed from main.js
+                        };
+                        const detailDiv = renderDetailedItemView(diffObj);
+                        detailDiv.style.marginLeft = '20px';
+                        detailDiv.style.marginTop = '10px';
+                        section.appendChild(detailDiv);
                     } else {
                         section.appendChild(itemDiv);
                     }
@@ -629,11 +568,213 @@ function formatValue(value) {
     return String(value);
 }
 
-// Helper to format settings object comparison
+// Helper to separate render logic for reuse
+const renderDetailedItemView = (diffItem) => {
+    const diffNode = document.createElement('div');
+    diffNode.style.marginBottom = '12px';
+    diffNode.style.paddingBottom = '12px';
+    diffNode.style.borderBottom = '1px solid var(--border)';
+
+    // Determine attributes
+    const getAttr = (comp, attr) => comp ? (comp.attributes[attr] || comp.attributes.delegate_descriptor_id) : '';
+    const getDesc = (comp) => comp ? comp.attributes.delegate_descriptor_id : '';
+
+    let extIdA, extIdB, nameA, nameB;
+
+    // diffItem matches compDiff structure: type, (componentA, componentB) OR (component), name...
+    if (diffItem.type === 'modified') {
+        extIdA = getDesc(diffItem.componentA);
+        extIdB = getDesc(diffItem.componentB);
+        nameA = diffItem.oldName || diffItem.name;
+        nameB = diffItem.newName || diffItem.name;
+    } else if (diffItem.type === 'added') {
+        extIdB = getDesc(diffItem.component);
+        nameB = diffItem.name;
+        extIdA = ''; nameA = '';
+    } else { // removed
+        extIdA = getDesc(diffItem.component);
+        nameA = diffItem.name;
+        extIdB = ''; nameB = '';
+    }
+
+    const extNameA = extensionMapping.getFriendlyName(extIdA);
+    const extNameB = extensionMapping.getFriendlyName(extIdB);
+
+    const typeNameA = extensionMapping.getFriendlyComponentType(extIdA);
+    const typeNameB = extensionMapping.getFriendlyComponentType(extIdB);
+
+    // Helper to create detailed row
+    const createRow = (label, valA, valB, isChanged) => {
+        const row = document.createElement('div');
+        row.style.fontSize = '12px';
+        row.style.marginBottom = '3px';
+        row.style.display = 'flex';
+
+        const labelSpan = document.createElement('span');
+        labelSpan.style.fontWeight = '600';
+        labelSpan.style.width = '80px';
+        labelSpan.style.flexShrink = '0';
+        labelSpan.innerText = label;
+
+        const valSpan = document.createElement('span');
+
+        if (diffItem.type === 'added') {
+            valSpan.style.color = '#2ecc71';
+            valSpan.innerText = valB;
+        } else if (diffItem.type === 'removed') {
+            valSpan.style.color = '#e74c3c';
+            valSpan.innerText = valA;
+        } else if (diffItem.type === 'modified') {
+            if (isChanged) {
+                valSpan.style.color = '#f39c12';
+                valSpan.innerText = `${valA} → ${valB}`;
+            } else {
+                valSpan.innerText = valB;
+            }
+        }
+
+        row.appendChild(labelSpan);
+        row.appendChild(valSpan);
+        return row;
+    };
+
+    // 1. Name
+    diffNode.appendChild(createRow('Name:', nameA, nameB, nameA !== nameB));
+
+    // 2. Extension
+    diffNode.appendChild(createRow('Extension:', extNameA, extNameB, extNameA !== extNameB));
+
+    // 3. Type
+    diffNode.appendChild(createRow('Type:', typeNameA, typeNameB, typeNameA !== typeNameB));
+
+    // 4. Settings (Code)
+    const settingsDiv = document.createElement('div');
+    settingsDiv.style.marginTop = '4px';
+    settingsDiv.style.fontSize = '12px';
+    settingsDiv.style.display = 'flex';
+
+    const settingsLabel = document.createElement('span');
+    settingsLabel.style.fontWeight = '600';
+    settingsLabel.style.width = '80px';
+    settingsLabel.style.flexShrink = '0';
+    settingsLabel.innerText = 'Settings:';
+    settingsDiv.appendChild(settingsLabel);
+
+    const settingsContent = document.createElement('span');
+
+    if (diffItem.type === 'modified') {
+        const clean = (attrs) => {
+            const c = { ...attrs };
+            ['created_at', 'updated_at', 'dirty', 'published', 'review_status', 'updated_by_email', 'updated_by_display_name'].forEach(k => delete c[k]);
+            return JSON.stringify(c);
+        };
+        const sA = clean(diffItem.componentA.attributes);
+        const sB = clean(diffItem.componentB.attributes);
+
+        if (sA === sB) {
+            settingsContent.style.color = '#7f8c8d';
+            settingsContent.innerText = '✓ No changes';
+        } else {
+            settingsContent.style.color = '#3498db';
+            settingsContent.style.cursor = 'pointer';
+            settingsContent.innerText = 'Show Code Diff ▼';
+            settingsContent.style.textDecoration = 'underline';
+
+            settingsContent.onclick = (e) => {
+                const details = diffNode.querySelector('.settings-diff');
+                if (details.style.display === 'none') {
+                    details.style.display = 'block';
+                    settingsContent.innerText = 'Hide Code Diff ▲';
+                } else {
+                    details.style.display = 'none';
+                    settingsContent.innerText = 'Show Code Diff ▼';
+                }
+                e.stopPropagation();
+            };
+        }
+    } else {
+        // Added/Removed: Show expand for full settings
+        settingsContent.style.color = diffItem.type === 'added' ? '#2ecc71' : '#e74c3c';
+        settingsContent.innerText = diffItem.type === 'added' ? 'Show Code (New Items) ▼' : 'Show Code (Removed) ▼';
+        settingsContent.style.cursor = 'pointer';
+        settingsContent.onclick = (e) => {
+            const details = diffNode.querySelector('.settings-diff');
+            if (details.style.display === 'none') {
+                details.style.display = 'block';
+                settingsContent.innerText = diffItem.type === 'added' ? 'Hide Code ▲' : 'Hide Code ▲';
+            } else {
+                details.style.display = 'none';
+                settingsContent.innerText = diffItem.type === 'added' ? 'Show Code (New Items) ▼' : 'Show Code (Removed) ▼';
+            }
+            e.stopPropagation();
+        };
+    }
+
+    settingsDiv.appendChild(settingsContent);
+    diffNode.appendChild(settingsDiv);
+
+    // Hidden diff/content container
+    const settingsDiffDiv = document.createElement('div');
+    settingsDiffDiv.className = 'settings-diff';
+    settingsDiffDiv.style.display = 'none';
+    settingsDiffDiv.style.marginTop = '8px';
+    settingsDiffDiv.style.padding = '8px';
+    settingsDiffDiv.style.backgroundColor = '#2c3e50';
+    settingsDiffDiv.style.color = '#ecf0f1';
+    settingsDiffDiv.style.fontFamily = 'Menlo, Monaco, Consolas, monospace';
+    settingsDiffDiv.style.whiteSpace = 'pre-wrap';
+    settingsDiffDiv.style.borderRadius = '4px';
+    settingsDiffDiv.style.fontSize = '11px';
+
+    if (diffItem.type === 'modified') {
+        let parsedA = diffItem.componentA.attributes.settings, parsedB = diffItem.componentB.attributes.settings;
+        try {
+            if (typeof parsedA === 'string') parsedA = JSON.parse(parsedA);
+            if (typeof parsedB === 'string') parsedB = JSON.parse(parsedB);
+        } catch (e) { }
+        settingsDiffDiv.innerHTML = formatSettingsDiff(parsedA, parsedB);
+    } else {
+        // Just show the content
+        const comp = diffItem.component || (diffItem.type === 'added' ? diffItem.componentB : diffItem.componentA);
+        let parsed = comp.attributes.settings;
+        try {
+            if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+        } catch (e) { }
+
+        // Use formatSettingsDiff with null for other side to get green/red lines?
+        // Or just print JSON.
+        // User asked "diff view of the settings is shown as them being added"
+        // formatSettingsDiff(null, parsed) -> all Added.
+        if (diffItem.type === 'added') {
+            settingsDiffDiv.innerHTML = formatSettingsDiff({}, parsed);
+        } else {
+            settingsDiffDiv.innerHTML = formatSettingsDiff(parsed, {});
+        }
+    }
+
+    diffNode.appendChild(settingsDiffDiv);
+    return diffNode;
+};
+
 // Helper to format settings object comparison
 function formatSettingsDiff(objA, objB) {
-    const jsonA = JSON.stringify(objA, null, 2);
-    const jsonB = JSON.stringify(objB, null, 2);
+    // Handling null/undefined for full add/remove
+    objA = objA || {};
+    objB = objB || {};
+
+    let jsonA = JSON.stringify(objA, null, 2);
+    let jsonB = JSON.stringify(objB, null, 2);
+
+    // Unescape common characters to make code redundant in JSON strings readable
+    const unescapeContent = (str) => {
+        return str.replace(/\\n/g, '\n')
+            .replace(/\\"/g, '"')
+            .replace(/\\t/g, '  ')
+            .replace(/\\r/g, '');
+    };
+
+    jsonA = unescapeContent(jsonA);
+    jsonB = unescapeContent(jsonB);
 
     const linesA = jsonA.split('\n');
     const linesB = jsonB.split('\n');
