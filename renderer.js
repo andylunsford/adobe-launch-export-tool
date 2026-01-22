@@ -359,9 +359,10 @@ function displayComparisonResults(comparison) {
                 section.appendChild(catHeader);
 
 
-                data[cat.key].forEach(item => {
+                data[cat.key].forEach((item, index) => {
                     const itemDiv = document.createElement('div');
                     itemDiv.className = `diff-item ${cat.className}`;
+                    itemDiv.style.cursor = cat.key === 'modified' && item.attributeDiffs && item.attributeDiffs.length > 0 ? 'pointer' : 'default';
 
                     // Build the display text
                     let displayText = item.name;
@@ -380,8 +381,109 @@ function displayComparisonResults(comparison) {
                         displayText += ` (revision ${item.revisionNumber})`;
                     }
 
+                    // Add expand indicator for modified items with diffs
+                    if (cat.key === 'modified' && item.attributeDiffs && item.attributeDiffs.length > 0) {
+                        displayText += ' ▼';
+                    }
+
                     itemDiv.innerText = displayText;
-                    section.appendChild(itemDiv);
+
+                    // Add click handler for modified items to show/hide diff details
+                    if (cat.key === 'modified' && item.attributeDiffs && item.attributeDiffs.length > 0) {
+                        const diffDetailsId = `diff-details-${cat.key}-${index}`;
+
+                        itemDiv.onclick = () => {
+                            const detailsDiv = document.getElementById(diffDetailsId);
+                            if (detailsDiv.style.display === 'none') {
+                                detailsDiv.style.display = 'block';
+                                itemDiv.innerText = itemDiv.innerText.replace('▼', '▲');
+                            } else {
+                                detailsDiv.style.display = 'none';
+                                itemDiv.innerText = itemDiv.innerText.replace('▲', '▼');
+                            }
+                        };
+
+                        section.appendChild(itemDiv);
+
+                        // Create diff details div
+                        const diffDetailsDiv = document.createElement('div');
+                        diffDetailsDiv.id = diffDetailsId;
+                        diffDetailsDiv.style.display = 'none';
+                        diffDetailsDiv.style.marginLeft = '20px';
+                        diffDetailsDiv.style.marginTop = '5px';
+                        diffDetailsDiv.style.padding = '10px';
+                        diffDetailsDiv.style.background = 'var(--bg-primary)';
+                        diffDetailsDiv.style.borderRadius = '4px';
+                        diffDetailsDiv.style.fontSize = '12px';
+                        // Add each attribute diff
+                        item.attributeDiffs.forEach(diff => {
+                            const diffItem = document.createElement('div');
+                            diffItem.style.marginBottom = '8px';
+                            diffItem.style.paddingBottom = '8px';
+                            diffItem.style.borderBottom = '1px solid var(--border)';
+
+                            const fieldName = document.createElement('div');
+                            fieldName.style.fontWeight = '600';
+                            fieldName.style.marginBottom = '4px';
+                            fieldName.innerText = `${diff.field}:`;
+                            diffItem.appendChild(fieldName);
+
+                            const oldValue = document.createElement('div');
+                            oldValue.style.color = '#e74c3c';
+                            oldValue.style.marginLeft = '10px';
+                            oldValue.innerText = `- ${formatValue(diff.oldValue)}`;
+                            diffItem.appendChild(oldValue);
+
+                            const newValue = document.createElement('div');
+                            newValue.style.color = '#2ecc71';
+                            newValue.style.marginLeft = '10px';
+                            newValue.innerText = `+ ${formatValue(diff.newValue)}`;
+                            diffItem.appendChild(newValue);
+
+                            diffDetailsDiv.appendChild(diffItem);
+                        });
+
+                        // Add component diffs if present (for rules)
+                        if (item.componentDiffs && item.componentDiffs.length > 0) {
+                            const componentHeader = document.createElement('div');
+                            componentHeader.style.fontWeight = '700';
+                            componentHeader.style.marginTop = '12px';
+                            componentHeader.style.marginBottom = '8px';
+                            componentHeader.style.fontSize = '13px';
+                            componentHeader.innerText = 'Rule Components:';
+                            diffDetailsDiv.appendChild(componentHeader);
+
+                            item.componentDiffs.forEach(compDiff => {
+                                const compDiffItem = document.createElement('div');
+                                compDiffItem.style.marginBottom = '8px';
+                                compDiffItem.style.paddingBottom = '8px';
+                                compDiffItem.style.borderBottom = '1px solid var(--border)';
+
+                                const compName = document.createElement('div');
+                                compName.style.fontWeight = '600';
+                                compName.style.marginBottom = '4px';
+
+                                if (compDiff.type === 'added') {
+                                    compName.style.color = '#2ecc71';
+                                    compName.innerText = `+ Added ${compDiff.componentType}: ${compDiff.name}`;
+                                } else if (compDiff.type === 'removed') {
+                                    compName.style.color = '#e74c3c';
+                                    compName.innerText = `- Removed ${compDiff.componentType}: ${compDiff.name}`;
+                                } else if (compDiff.type === 'modified') {
+                                    compName.style.color = '#f39c12';
+                                    compName.innerText = `~ Modified ${compDiff.componentType}: ${compDiff.name}`;
+                                }
+
+                                compDiffItem.appendChild(compName);
+                                diffDetailsDiv.appendChild(compDiffItem);
+                            });
+                        }
+
+
+                        section.appendChild(diffDetailsDiv);
+                    } else {
+                        section.appendChild(itemDiv);
+                    }
                 });
             }
         });
@@ -433,4 +535,17 @@ async function startExportJob() {
         ipcRenderer.removeListener('export-progress', progressListener);
         hideLoading();
     }
+}
+
+// Helper function to format values for diff display
+function formatValue(value) {
+    if (value === null || value === undefined) {
+        return String(value);
+    }
+    if (typeof value === 'object') {
+        // For objects and arrays, show a formatted JSON string (truncated if too long)
+        const jsonStr = JSON.stringify(value, null, 2);
+        return jsonStr.length > 200 ? jsonStr.substring(0, 200) + '...' : jsonStr;
+    }
+    return String(value);
 }

@@ -241,9 +241,27 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                 fetchAllPages(`https://reactor.adobe.io/builds/${buildId}/extensions`, headers)
             ]);
 
+            // For each rule, fetch its rule components (events, actions, conditions)
+            const rulesWithComponents = await Promise.all(rules.map(async (rule) => {
+                try {
+                    const ruleComponentsUrl = rule.relationships?.rule_components?.links?.related;
+                    if (ruleComponentsUrl) {
+                        const components = await fetchAllPages(ruleComponentsUrl, headers);
+                        return {
+                            ...rule,
+                            rule_components: components
+                        };
+                    }
+                    return rule;
+                } catch (error) {
+                    console.error(`Error fetching components for rule ${rule.id}:`, error.message);
+                    return rule;
+                }
+            }));
+
             return {
                 buildId: buildId,
-                rules: rules,
+                rules: rulesWithComponents,
                 data_elements: data_elements,
                 extensions: extensions
             };
@@ -286,18 +304,105 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                     const settingsA = JSON.stringify(itemA.attributes);
                     const settingsB = JSON.stringify(itemB.attributes);
 
-                    if (settingsA !== settingsB) {
+                    // For rules, also compare rule components
+                    const componentsA = itemA.rule_components ? JSON.stringify(itemA.rule_components) : null;
+                    const componentsB = itemB.rule_components ? JSON.stringify(itemB.rule_components) : null;
+
+                    if (settingsA !== settingsB || componentsA !== componentsB) {
                         // Item modified - show both old and new names if renamed
                         const nameA = itemA.attributes.name;
                         const nameB = itemB.attributes.name;
                         const displayName = nameA !== nameB ? `${nameA} → ${nameB}` : nameB;
+
+                        // Create detailed diff of attributes
+                        const attributeDiffs = [];
+                        const allKeys = new Set([...Object.keys(itemA.attributes), ...Object.keys(itemB.attributes)]);
+
+                        for (const key of allKeys) {
+                            const valueA = itemA.attributes[key];
+                            const valueB = itemB.attributes[key];
+
+                            // Skip certain metadata fields that aren't meaningful for comparison
+                            if (['created_at', 'updated_at', 'published_at', 'dirty', 'published', 'review_status', 'updated_by_email', 'updated_by_display_name'].includes(key)) {
+                                continue;
+                            }
+
+                            if (JSON.stringify(valueA) !== JSON.stringify(valueB)) {
+                                attributeDiffs.push({
+                                    field: key,
+                                    oldValue: valueA,
+                                    newValue: valueB
+                                });
+                            }
+                        }
+
+                        // For rules, compare rule components (events, actions, conditions)
+                        let componentDiffs = [];
+                        if (itemA.rule_components || itemB.rule_components) {
+                            const getComponentStableId = (comp) => comp.relationships?.origin?.data?.id || comp.id;
+
+                            const componentsMapA = new Map((itemA.rule_components || []).map(c => [getComponentStableId(c), c]));
+                            const componentsMapB = new Map((itemB.rule_components || []).map(c => [getComponentStableId(c), c]));
+
+                            // Find added, removed, and modified components
+                            const allComponentIds = new Set([...componentsMapA.keys(), ...componentsMapB.keys()]);
+
+                            for (const componentId of allComponentIds) {
+                                const compA = componentsMapA.get(componentId);
+                                const compB = componentsMapB.get(componentId);
+
+                                if (!compA && compB) {
+                                    // Component added
+                                    componentDiffs.push({
+                                        type: 'added',
+                                        componentType: compB.attributes.delegate_descriptor_id,
+                                        name: compB.attributes.name || compB.attributes.delegate_descriptor_id,
+                                        component: compB
+                                    });
+                                } else if (compA && !compB) {
+                                    // Component removed
+                                    componentDiffs.push({
+                                        type: 'removed',
+                                        componentType: compA.attributes.delegate_descriptor_id,
+                                        name: compA.attributes.name || compA.attributes.delegate_descriptor_id,
+                                        component: compA
+                                    });
+                                } else if (compA && compB) {
+                                    // Check if component modified
+                                    // Define a helper to stringify attributes excluding ignored fields
+                                    const stringifyAttributes = (attrs) => {
+                                        const cleanAttrs = { ...attrs };
+                                        ['created_at', 'updated_at', 'dirty', 'published', 'review_status', 'updated_by_email', 'updated_by_display_name'].forEach(key => delete cleanAttrs[key]);
+                                        return JSON.stringify(cleanAttrs);
+                                    };
+
+                                    const settingsCompA = stringifyAttributes(compA.attributes);
+                                    const settingsCompB = stringifyAttributes(compB.attributes);
+
+                                    if (settingsCompA !== settingsCompB) {
+                                        componentDiffs.push({
+                                            type: 'modified',
+                                            componentType: compB.attributes.delegate_descriptor_id,
+                                            name: compB.attributes.name || compB.attributes.delegate_descriptor_id,
+                                            componentA: compA,
+                                            componentB: compB
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
                         modified.push({
                             id: itemB.id,
                             name: displayName,
                             oldName: nameA,
                             newName: nameB,
                             revisionNumberA: itemA.attributes.revision_number,
-                            revisionNumberB: itemB.attributes.revision_number
+                            revisionNumberB: itemB.attributes.revision_number,
+                            itemA: itemA,  // Store full item data for detailed diff
+                            itemB: itemB,
+                            attributeDiffs: attributeDiffs,
+                            componentDiffs: componentDiffs
                         });
                     } else {
                         // Item is identical
