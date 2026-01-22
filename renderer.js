@@ -1,4 +1,5 @@
 const { ipcRenderer, shell } = require('electron');
+const extensionMapping = require('./extension-mapping');
 
 let globalToken = null;
 let currentCreds = {};
@@ -444,16 +445,10 @@ function displayComparisonResults(comparison) {
                         });
 
                         // Add component diffs if present (for rules)
+                        // Add component diffs if present (for rules)
                         if (item.componentDiffs && item.componentDiffs.length > 0) {
-                            const componentHeader = document.createElement('div');
-                            componentHeader.style.fontWeight = '700';
-                            componentHeader.style.marginTop = '12px';
-                            componentHeader.style.marginBottom = '8px';
-                            componentHeader.style.fontSize = '13px';
-                            componentHeader.innerText = 'Rule Components:';
-                            diffDetailsDiv.appendChild(componentHeader);
-
-                            item.componentDiffs.forEach(compDiff => {
+                            // Helper to render a component diff item
+                            const renderComponentDiff = (compDiff) => {
                                 const compDiffItem = document.createElement('div');
                                 compDiffItem.style.marginBottom = '8px';
                                 compDiffItem.style.paddingBottom = '8px';
@@ -463,22 +458,106 @@ function displayComparisonResults(comparison) {
                                 compName.style.fontWeight = '600';
                                 compName.style.marginBottom = '4px';
 
+                                // Get friendly name for extension/delegate
+                                const extName = extensionMapping.getFriendlyName(compDiff.componentType);
+                                const typeName = extensionMapping.getFriendlyComponentType(compDiff.componentType);
+
+                                // Construct display name: [Extension] Component Type: User Name
+                                // If typeName is same as user name (or empty), logic might adjust, but basic format:
+                                let displayName = `[${extName}]`;
+                                if (typeName && typeName !== compDiff.name) {
+                                    displayName += ` ${typeName}:`;
+                                }
+                                displayName += ` ${compDiff.name}`;
+
                                 if (compDiff.type === 'added') {
                                     compName.style.color = '#2ecc71';
-                                    compName.innerText = `+ Added ${compDiff.componentType}: ${compDiff.name}`;
+                                    compName.innerText = `+ Added: ${displayName}`;
+                                    compDiffItem.appendChild(compName);
                                 } else if (compDiff.type === 'removed') {
                                     compName.style.color = '#e74c3c';
-                                    compName.innerText = `- Removed ${compDiff.componentType}: ${compDiff.name}`;
+                                    compName.innerText = `- Removed: ${displayName}`;
+                                    compDiffItem.appendChild(compName);
                                 } else if (compDiff.type === 'modified') {
                                     compName.style.color = '#f39c12';
-                                    compName.innerText = `~ Modified ${compDiff.componentType}: ${compDiff.name}`;
+                                    compName.style.cursor = 'pointer';
+                                    compName.innerHTML = `~ Modified: ${displayName} <span style="font-size: 10px">▼</span>`;
+                                    compDiffItem.appendChild(compName);
+
+                                    // settings diff container
+                                    const settingsDiffDiv = document.createElement('div');
+                                    settingsDiffDiv.style.display = 'none';
+                                    settingsDiffDiv.style.marginTop = '5px';
+                                    settingsDiffDiv.style.padding = '8px';
+                                    settingsDiffDiv.style.backgroundColor = '#2c3e50'; // Darker bg for code
+                                    settingsDiffDiv.style.color = '#ecf0f1';
+                                    settingsDiffDiv.style.fontFamily = 'Menlo, Monaco, Consolas, monospace';
+                                    settingsDiffDiv.style.whiteSpace = 'pre-wrap';
+                                    settingsDiffDiv.style.borderRadius = '4px';
+                                    settingsDiffDiv.style.fontSize = '11px';
+
+                                    // Toggle visibility on click
+                                    compName.onclick = (e) => {
+                                        e.stopPropagation(); // Prevent bubbling to parent
+                                        if (settingsDiffDiv.style.display === 'none') {
+                                            settingsDiffDiv.style.display = 'block';
+                                            compName.innerHTML = `~ Modified: ${displayName} <span style="font-size: 10px">▲</span>`;
+
+                                            // Render settings diff if not already done
+                                            if (settingsDiffDiv.innerHTML === '') {
+                                                const settingsA = compDiff.componentA.attributes.settings;
+                                                const settingsB = compDiff.componentB.attributes.settings;
+
+                                                // Try to parse JSON settings if possible
+                                                let parsedA = settingsA;
+                                                let parsedB = settingsB;
+
+                                                try {
+                                                    if (typeof settingsA === 'string') parsedA = JSON.parse(settingsA);
+                                                    if (typeof settingsB === 'string') parsedB = JSON.parse(settingsB);
+                                                } catch (e) { /* keep as string if parse fails */ }
+
+                                                settingsDiffDiv.innerHTML = formatSettingsDiff(parsedA, parsedB);
+                                            }
+                                        } else {
+                                            settingsDiffDiv.style.display = 'none';
+                                            compName.innerHTML = `~ Modified: ${displayName} <span style="font-size: 10px">▼</span>`;
+                                        }
+                                    };
+
+                                    compDiffItem.appendChild(settingsDiffDiv);
                                 }
+                                return compDiffItem;
+                            };
 
-                                compDiffItem.appendChild(compName);
-                                diffDetailsDiv.appendChild(compDiffItem);
-                            });
+                            // Group by type (Events, Conditions, Actions)
+                            const events = item.componentDiffs.filter(d => extensionMapping.getComponentType(d.componentType) === 'events');
+                            const conditions = item.componentDiffs.filter(d => extensionMapping.getComponentType(d.componentType) === 'conditions');
+                            const actions = item.componentDiffs.filter(d => extensionMapping.getComponentType(d.componentType) === 'actions');
+                            const others = item.componentDiffs.filter(d => extensionMapping.getComponentType(d.componentType) === 'unknown');
+
+                            // Helper to append section
+                            const appendSection = (title, items) => {
+                                if (items.length > 0) {
+                                    const header = document.createElement('div');
+                                    header.style.fontWeight = '700';
+                                    header.style.marginTop = '12px';
+                                    header.style.marginBottom = '8px';
+                                    header.style.fontSize = '13px';
+                                    header.style.color = '#34495e';
+                                    header.style.borderBottom = '1px solid #bdc3c7';
+                                    header.innerText = title;
+                                    diffDetailsDiv.appendChild(header);
+
+                                    items.forEach(d => diffDetailsDiv.appendChild(renderComponentDiff(d)));
+                                }
+                            };
+
+                            appendSection('Events (Trigger Rules)', events);
+                            appendSection('Conditions (If)', conditions);
+                            appendSection('Actions (Then)', actions);
+                            appendSection('Other Components', others);
                         }
-
 
                         section.appendChild(diffDetailsDiv);
                     } else {
@@ -548,4 +627,48 @@ function formatValue(value) {
         return jsonStr.length > 200 ? jsonStr.substring(0, 200) + '...' : jsonStr;
     }
     return String(value);
+}
+
+// Helper to format settings object comparison
+// Helper to format settings object comparison
+function formatSettingsDiff(objA, objB) {
+    const jsonA = JSON.stringify(objA, null, 2);
+    const jsonB = JSON.stringify(objB, null, 2);
+
+    const linesA = jsonA.split('\n');
+    const linesB = jsonB.split('\n');
+
+    // Compute Longest Common Subsequence (LCS) matrix
+    const matrix = Array(linesA.length + 1).fill(null).map(() => Array(linesB.length + 1).fill(0));
+
+    for (let i = 1; i <= linesA.length; i++) {
+        for (let j = 1; j <= linesB.length; j++) {
+            if (linesA[i - 1] === linesB[j - 1]) {
+                matrix[i][j] = matrix[i - 1][j - 1] + 1;
+            } else {
+                matrix[i][j] = Math.max(matrix[i - 1][j], matrix[i][j - 1]);
+            }
+        }
+    }
+
+    // Backtrack to generate diff
+    let output = '';
+    const diffLines = [];
+    let i = linesA.length;
+    let j = linesB.length;
+
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && linesA[i - 1] === linesB[j - 1]) {
+            diffLines.unshift(`  ${linesA[i - 1]}`);
+            i--; j--;
+        } else if (j > 0 && (i === 0 || matrix[i][j - 1] >= matrix[i - 1][j])) {
+            diffLines.unshift(`<span style="color: #2ecc71;">+ ${linesB[j - 1]}</span>`);
+            j--;
+        } else if (i > 0 && (j === 0 || matrix[i][j - 1] < matrix[i - 1][j])) {
+            diffLines.unshift(`<span style="color: #e74c3c;">- ${linesA[i - 1]}</span>`);
+            i--;
+        }
+    }
+
+    return diffLines.join('\n');
 }
