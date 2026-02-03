@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const https = require('https');
+const reactorCore = require('./lib/reactor-core');
 
 // [SME Fix] Agent for Corporate Proxies
 const proxyAgent = new https.Agent({ rejectUnauthorized: false });
@@ -28,6 +29,15 @@ app.whenReady().then(createWindow);
 function sanitizeFolderName(name) {
     if (!name) return "Untitled";
     return name.replace(/[^a-zA-Z0-9\- ]/g, '').trim();
+}
+
+function getHeaders(token, creds) {
+    return {
+        "Authorization": `Bearer ${token}`,
+        "x-api-key": creds.client_id,
+        "x-gw-ims-org-id": creds.organization_id,
+        "Accept": "application/vnd.api+json;revision=1"
+    };
 }
 
 function saveVariables(data) {
@@ -103,51 +113,36 @@ ipcMain.handle('adobe-login', async (event, creds) => {
 });
 
 ipcMain.handle('get-companies', async (event, { token, creds }) => {
+    const headers = getHeaders(token, creds);
     const response = await axios.get("https://reactor.adobe.io/companies", {
-        headers: {
-            "Authorization": `Bearer ${token}`,
-            "x-api-key": creds.client_id,
-            "Accept": "application/vnd.api+json;revision=1"
-        },
+        headers,
         httpsAgent: proxyAgent
     });
     return response.data.data;
 });
 
 ipcMain.handle('get-properties', async (event, { token, creds, companyId }) => {
+    const headers = getHeaders(token, creds);
     const response = await axios.get(`https://reactor.adobe.io/companies/${companyId}/properties?page[size]=500`, {
-        headers: {
-            "Authorization": `Bearer ${token}`,
-            "x-api-key": creds.client_id,
-            "x-gw-ims-org-id": creds.organization_id,
-            "Accept": "application/vnd.api+json;revision=1"
-        },
+        headers,
         httpsAgent: proxyAgent
     });
     return response.data.data;
 });
 
 ipcMain.handle('get-libraries', async (event, { token, creds, propertyId }) => {
+    const headers = getHeaders(token, creds);
     const response = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/libraries?page[size]=100`, {
-        headers: {
-            "Authorization": `Bearer ${token}`,
-            "x-api-key": creds.client_id,
-            "x-gw-ims-org-id": creds.organization_id,
-            "Accept": "application/vnd.api+json;revision=1"
-        },
+        headers,
         httpsAgent: proxyAgent
     });
     return response.data.data;
 });
 
 ipcMain.handle('get-environments', async (event, { token, creds, propertyId }) => {
+    const headers = getHeaders(token, creds);
     const response = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/environments`, {
-        headers: {
-            "Authorization": `Bearer ${token}`,
-            "x-api-key": creds.client_id,
-            "x-gw-ims-org-id": creds.organization_id,
-            "Accept": "application/vnd.api+json;revision=1"
-        },
+        headers,
         httpsAgent: proxyAgent
     });
     return response.data.data;
@@ -155,12 +150,7 @@ ipcMain.handle('get-environments', async (event, { token, creds, propertyId }) =
 
 ipcMain.handle('get-environment-library', async (event, { token, creds, environmentId }) => {
     try {
-        const headers = {
-            "Authorization": `Bearer ${token}`,
-            "x-api-key": creds.client_id,
-            "x-gw-ims-org-id": creds.organization_id,
-            "Accept": "application/vnd.api+json;revision=1"
-        };
+        const headers = getHeaders(token, creds);
 
         // Get the latest build for this environment
         const buildRes = await axios.get(`https://reactor.adobe.io/environments/${environmentId}/builds?page[size]=1`, {
@@ -192,14 +182,9 @@ ipcMain.handle('get-environment-library', async (event, { token, creds, environm
     }
 });
 
-ipcMain.handle('perform-environment-comparison', async (event, { token, creds, envAId, envBId }) => {
+ipcMain.handle('perform-environment-comparison', async (event, { token, creds, envAId, envBId, mode }) => {
     try {
-        const headers = {
-            "Authorization": `Bearer ${token}`,
-            "x-api-key": creds.client_id,
-            "x-gw-ims-org-id": creds.organization_id,
-            "Accept": "application/vnd.api+json;revision=1"
-        };
+        const headers = getHeaders(token, creds);
 
         // Helper function to fetch all pages of data from an endpoint
         async function fetchAllPages(url, headers) {
@@ -218,39 +203,20 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
             return allData;
         }
 
-        // Helper function to fetch build data for an environment
-        async function fetchEnvironmentData(environmentId) {
-            // Get the latest build
-            const buildRes = await axios.get(`https://reactor.adobe.io/environments/${environmentId}/builds?page[size]=1`, {
-                headers,
-                httpsAgent: proxyAgent
-            });
-
-            if (!buildRes.data.data || buildRes.data.data.length === 0) {
-                return { rules: [], data_elements: [], extensions: [], buildId: null };
-            }
-
-            const latestBuild = buildRes.data.data[0];
-            const buildId = latestBuild.id;
-
-            // Fetch ALL rules, data_elements, and extensions for this BUILD with pagination
-            // This gives us the actual deployed revisions
+        // Helper to fetch build contents
+        async function fetchBuildContents(buildId) {
             const [rules, data_elements, extensions] = await Promise.all([
                 fetchAllPages(`https://reactor.adobe.io/builds/${buildId}/rules`, headers),
                 fetchAllPages(`https://reactor.adobe.io/builds/${buildId}/data_elements`, headers),
                 fetchAllPages(`https://reactor.adobe.io/builds/${buildId}/extensions`, headers)
             ]);
 
-            // For each rule, fetch its rule components (events, actions, conditions)
             const rulesWithComponents = await Promise.all(rules.map(async (rule) => {
                 try {
                     const ruleComponentsUrl = rule.relationships?.rule_components?.links?.related;
                     if (ruleComponentsUrl) {
                         const components = await fetchAllPages(ruleComponentsUrl, headers);
-                        return {
-                            ...rule,
-                            rule_components: components
-                        };
+                        return { ...rule, rule_components: components };
                     }
                     return rule;
                 } catch (error) {
@@ -259,19 +225,65 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                 }
             }));
 
-            return {
-                buildId: buildId,
-                rules: rulesWithComponents,
-                data_elements: data_elements,
-                extensions: extensions
-            };
+            return { rules: rulesWithComponents, data_elements, extensions, buildId };
         }
 
-        // Fetch data for both environments
-        const [envAData, envBData] = await Promise.all([
-            fetchEnvironmentData(envAId),
-            fetchEnvironmentData(envBId)
-        ]);
+        // Helper function to fetch build data for an environment OR library
+        async function fetchEnvironmentData(entityId) {
+            if (entityId.startsWith('LB')) {
+                // It's a Library
+                const [rules, data_elements, extensions] = await Promise.all([
+                    fetchAllPages(`https://reactor.adobe.io/libraries/${entityId}/rules`, headers),
+                    fetchAllPages(`https://reactor.adobe.io/libraries/${entityId}/data_elements`, headers),
+                    fetchAllPages(`https://reactor.adobe.io/libraries/${entityId}/extensions`, headers)
+                ]);
+                
+                const rulesWithComponents = await Promise.all(rules.map(async (rule) => {
+                    try {
+                        const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
+                        const res = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
+                        return { ...rule, rule_components: res.data.data };
+                    } catch (e) { return rule; }
+                }));
+
+                return { rules: rulesWithComponents, data_elements, extensions, buildId: entityId };
+            } else {
+                // It's an Environment -> Get latest build
+                const buildRes = await axios.get(`https://reactor.adobe.io/environments/${entityId}/builds?page[size]=1`, { headers, httpsAgent: proxyAgent });
+                if (!buildRes.data.data || buildRes.data.data.length === 0) return { rules: [], data_elements: [], extensions: [], buildId: null };
+                
+                return await fetchBuildContents(buildRes.data.data[0].id);
+            }
+        }
+
+        let envAData, envBData;
+
+        if (mode === 'history') {
+            // HISTORY MODE: Compare Build N (Latest) vs Build N-1 (Previous)
+            // envAId is the Environment ID
+            const buildRes = await axios.get(`https://reactor.adobe.io/environments/${envAId}/builds?page[size]=2`, { headers, httpsAgent: proxyAgent });
+            const builds = buildRes.data.data;
+
+            if (builds.length < 2) {
+                throw new Error("Not enough build history (need at least 2 builds) to compare.");
+            }
+
+            // builds[0] is Latest (New/B), builds[1] is Previous (Old/A)
+            console.log(`Comparing Build ${builds[1].id} (Old) vs ${builds[0].id} (New)`);
+            
+            // Parallel fetch
+            [envAData, envBData] = await Promise.all([
+                fetchBuildContents(builds[1].id), // Old
+                fetchBuildContents(builds[0].id)  // New
+            ]);
+
+        } else {
+            // STANDARD COMPARISON
+            [envAData, envBData] = await Promise.all([
+                fetchEnvironmentData(envAId),
+                fetchEnvironmentData(envBId)
+            ]);
+        }
 
         // Helper function to compare arrays of items
         function compareItems(itemsA, itemsB, itemType) {
@@ -452,7 +464,24 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
     }
 });
 
-// --- EXPORT LOGIC (Fixed: Removed Error Swallowing) ---
+// --- EXPORT LOGIC ---
+
+// Cache for extension packages to avoid redundant network calls
+const extensionPackageCache = new Map();
+
+async function getExtensionPackage(id, headers) {
+    if (extensionPackageCache.has(id)) return extensionPackageCache.get(id);
+    
+    try {
+        const response = await axios.get(`https://reactor.adobe.io/extension_packages/${id}`, { headers, httpsAgent: proxyAgent });
+        const pkg = response.data.data;
+        extensionPackageCache.set(id, pkg);
+        return pkg;
+    } catch (e) {
+        console.error(`Failed to fetch extension package ${id}:`, e.message);
+        return null; // Return null so toFiles can skip transformation gracefully
+    }
+}
 
 ipcMain.handle('perform-export', async (event, args) => {
     const { types, properties, token, creds } = args;
@@ -465,44 +494,77 @@ ipcMain.handle('perform-export', async (event, args) => {
     if (canceled || filePaths.length === 0) return "Export Cancelled";
     const baseDir = filePaths[0];
 
-    const headers = {
-        "Authorization": `Bearer ${token}`,
-        "x-api-key": creds.client_id,
-        "x-gw-ims-org-id": creds.organization_id,
-        "Accept": "application/vnd.api+json;revision=1"
-    };
+    const headers = getHeaders(token, creds);
 
     // Helper to send updates to UI
     const sendStatus = (msg) => event.sender.send('export-progress', msg);
+    // Prepare the fetcher callback for reactor-core
+    const fetchPkg = (id) => getExtensionPackage(id, headers);
 
     try {
         for (let i = 0; i < properties.length; i++) {
             const prop = properties[i];
-            const propSafeName = sanitizeFolderName(prop.name);
+            
+            const currentCount = i + 1;
+            const totalCount = properties.length;
+            const progressMsg = `Exporting ${prop.name} (${currentCount}/${totalCount})...`;
+            
+            console.log(progressMsg);
+            sendStatus(progressMsg);
 
-            sendStatus(`Processing ${prop.name} (${i + 1}/${properties.length})...`);
+            const propSafeName = sanitizeFolderName(prop.name);
+            const propBaseDir = path.join(baseDir, propSafeName);
 
             // --- OPTION 1: Full Export ---
             if (types.includes('full')) {
-                const targetDir = path.join(baseDir, propSafeName, "Full Export");
+                const targetDir = path.join(propBaseDir, "Full Export");
                 if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
                 sendStatus(`Fetching Rules for ${prop.name}...`);
-                const rulesUrl = `https://reactor.adobe.io/properties/${prop.id}/rules?page[size]=1000`;
-                await fetchAndSaveRules(rulesUrl, headers, targetDir);
+                const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                for (const rule of rulesRes.data.data) {
+                    await reactorCore.toFiles(rule, targetDir, fetchPkg);
+                }
 
                 sendStatus(`Fetching Data Elements & Extensions for ${prop.name}...`);
-                await fetchAndSaveComponents({
-                    "data_elements": `https://reactor.adobe.io/properties/${prop.id}/data_elements?page[size]=1000`,
-                    "extensions": `https://reactor.adobe.io/properties/${prop.id}/extensions?page[size]=1000`
-                }, headers, targetDir);
+                
+                const deRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/data_elements?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                for (const de of deRes.data.data) {
+                    await reactorCore.toFiles(de, targetDir, fetchPkg);
+                }
+
+                const extRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/extensions?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                for (const ext of extRes.data.data) {
+                    await reactorCore.toFiles(ext, targetDir, fetchPkg);
+                }
+
+                // 4. Rule Components (Per-Rule Strategy to avoid 403s)
+                sendStatus(`Fetching Rule Components for ${rulesRes.data.data.length} rules...`);
+                
+                // Fetch components for all rules in parallel (chunked)
+                const rules = rulesRes.data.data;
+                const CHUNK_SIZE = 5;
+                
+                for (let j = 0; j < rules.length; j += CHUNK_SIZE) {
+                    const chunk = rules.slice(j, j + CHUNK_SIZE);
+                    await Promise.all(chunk.map(async (rule) => {
+                        try {
+                            const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
+                            const compRes = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
+                            for (const rc of compRes.data.data) {
+                                await reactorCore.toFiles(rc, targetDir, fetchPkg);
+                            }
+                        } catch (rcErr) {
+                            console.error(`Failed to fetch components for rule ${rule.attributes.name}:`, rcErr.message);
+                        }
+                    }));
+                }
             }
 
             // --- OPTION 2: Library Export ---
             if (types.includes('library')) {
                 sendStatus(`Locating Production Library for ${prop.name}...`);
 
-                // Fetch Env -> Build -> Library flow
                 const envRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/environments`, { headers, httpsAgent: proxyAgent });
                 const prodEnv = envRes.data.data.find(e => e.attributes.stage === 'production');
 
@@ -520,20 +582,27 @@ ipcMain.handle('perform-export', async (event, args) => {
                         const libraryName = libRes.data.data.attributes.name;
                         const libSafeName = sanitizeFolderName(libraryName);
 
-                        const targetDir = path.join(baseDir, propSafeName, "Library Export", libSafeName);
+                        const targetDir = path.join(propBaseDir, "Library Export", libSafeName);
                         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
                         sendStatus(`Downloading Library "${libraryName}"...`);
 
-                        // 1. Process Library Rules
-                        const rulesUrl = `https://reactor.adobe.io/libraries/${libraryId}/rules`;
-                        await fetchAndSaveRules(rulesUrl, headers, targetDir);
+                        // Rules
+                        const rulesRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rules`, { headers, httpsAgent: proxyAgent });
+                        for (const r of rulesRes.data.data) await reactorCore.toFiles(r, targetDir, fetchPkg);
 
-                        // 2. Process Library Components
-                        await fetchAndSaveComponents({
-                            "data_elements": `https://reactor.adobe.io/libraries/${libraryId}/data_elements`,
-                            "extensions": `https://reactor.adobe.io/libraries/${libraryId}/extensions`
-                        }, headers, targetDir);
+                        // Data Elements
+                        const deRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/data_elements`, { headers, httpsAgent: proxyAgent });
+                        for (const d of deRes.data.data) await reactorCore.toFiles(d, targetDir, fetchPkg);
+                        
+                        // Extensions
+                        const extRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/extensions`, { headers, httpsAgent: proxyAgent });
+                        for (const e of extRes.data.data) await reactorCore.toFiles(e, targetDir, fetchPkg);
+
+                        // Rule Components
+                        const rcRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rule_components`, { headers, httpsAgent: proxyAgent });
+                        for (const rc of rcRes.data.data) await reactorCore.toFiles(rc, targetDir, fetchPkg);
+
                     } else {
                         console.log(`Skipping Library Export for ${prop.name}: No builds found.`);
                     }
@@ -545,82 +614,328 @@ ipcMain.handle('perform-export', async (event, args) => {
         return `Export Complete! Files saved to: ${baseDir}`;
     } catch (error) {
         console.error(error);
-        // [FIX] Return the specific error to the UI
         throw new Error(`Failed: ${error.message} (URL: ${error.config ? error.config.url : 'Unknown'})`);
     }
 });
 
-// --- RESTORED FETCHERS (Fixed: Removed swallowing) ---
+// --- DEVELOPER SYNC LOGIC ---
 
-async function fetchAndSaveComponents(endpoints, headers, outputDir) {
-    for (const [componentType, url] of Object.entries(endpoints)) {
-        const componentDir = path.join(outputDir, componentType);
-        if (!fs.existsSync(componentDir)) fs.mkdirSync(componentDir, { recursive: true });
+ipcMain.handle('select-folder', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+        title: 'Select Project Folder',
+        properties: ['openDirectory', 'createDirectory']
+    });
+    return canceled ? null : filePaths[0];
+});
 
-        // [FIX] No try/catch here. If this fails, we want the whole export to stop/alert.
-        const response = await axios.get(url, { headers, httpsAgent: proxyAgent });
-        const items = response.data.data;
+ipcMain.handle('save-file', async (event, { content, defaultName }) => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+        title: 'Save Release Notes',
+        defaultPath: defaultName || 'release-notes.md',
+        filters: [{ name: 'Markdown', extensions: ['md'] }]
+    });
+    
+    if (canceled || !filePath) return false;
+    
+    fs.writeFileSync(filePath, content);
+    return true;
+});
 
-        for (const item of items) {
-            if (item.attributes.enabled === false) continue;
-            const filePath = path.join(componentDir, `${item.id}.json`);
-            fs.writeFileSync(filePath, JSON.stringify(item, null, 2));
+ipcMain.handle('perform-sync-download', async (event, args) => {
+    const { property, targetDir, token, creds } = args;
+    const headers = getHeaders(token, creds);
+
+    const sendLog = (msg) => event.sender.send('sync-log', msg);
+    const fetchPkg = (id) => getExtensionPackage(id, headers);
+
+    try {
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+        // 1. Save .reactor-settings.json (Config file for the project)
+        fs.writeFileSync(path.join(targetDir, '.reactor-settings.json'), JSON.stringify({
+            propertyId: property.id,
+            propertyName: property.name,
+            orgId: creds.organization_id
+        }, null, 2));
+        sendLog(`Created project config at ${targetDir}`);
+
+        // 2. Fetch & Save Everything
+        sendLog(`Fetching Rules...`);
+        const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        for (const rule of rulesRes.data.data) {
+            await reactorCore.toFiles(rule, targetDir, fetchPkg);
         }
+
+        sendLog(`Fetching Data Elements...`);
+        const deRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/data_elements?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        for (const de of deRes.data.data) {
+            await reactorCore.toFiles(de, targetDir, fetchPkg);
+        }
+
+        sendLog(`Fetching Extensions...`);
+        const extRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/extensions?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        for (const ext of extRes.data.data) {
+            await reactorCore.toFiles(ext, targetDir, fetchPkg);
+        }
+
+        sendLog(`Fetching Rule Components...`);
+        const rules = rulesRes.data.data;
+        const CHUNK_SIZE = 5;
+        for (let j = 0; j < rules.length; j += CHUNK_SIZE) {
+            const chunk = rules.slice(j, j + CHUNK_SIZE);
+            await Promise.all(chunk.map(async (rule) => {
+                try {
+                    const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
+                    const compRes = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
+                    for (const rc of compRes.data.data) {
+                        await reactorCore.toFiles(rc, targetDir, fetchPkg);
+                    }
+                } catch (rcErr) {
+                    sendLog(`Error fetching components for ${rule.attributes.name}: ${rcErr.message}`);
+                }
+            }));
+        }
+
+        return "Download Complete!";
+    } catch (error) {
+        console.error(error);
+        throw new Error(`Sync Download Failed: ${error.message}`);
     }
-}
+});
 
-async function fetchAndSaveRules(url, headers, outputDir) {
-    const rulesBaseDir = path.join(outputDir, 'rules');
-    if (!fs.existsSync(rulesBaseDir)) fs.mkdirSync(rulesBaseDir, { recursive: true });
+ipcMain.handle('perform-sync-diff', async (event, args) => {
+    const { targetDir, token, creds } = args;
+    
+    // Read config to find Property ID
+    const configPath = path.join(targetDir, '.reactor-settings.json');
+    if (!fs.existsSync(configPath)) throw new Error("No .reactor-settings.json found. Please run 'Initialize' first.");
+    
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const propertyId = config.propertyId;
 
-    // [FIX] No try/catch. Let errors bubble up.
-    const response = await axios.get(url, { headers, httpsAgent: proxyAgent });
-    const rules = response.data.data;
+    const headers = getHeaders(token, creds);
 
-    if (!rules || rules.length === 0) return; // Nothing to do
+    // Define API Fetchers for the Diff Runner
+    const api = {
+        getRules: async () => {
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+            return res.data.data;
+        },
+        getDataElements: async () => {
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/data_elements?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+            return res.data.data;
+        },
+        getExtensions: async () => {
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/extensions?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+            return res.data.data;
+        }
+    };
+    
+    const fetchPkg = (id) => getExtensionPackage(id, headers);
 
-    for (const rule of rules) {
-        if (rule.attributes.enabled === false) continue;
+    try {
+        const result = await reactorCore.diff(targetDir, api, fetchPkg);
+        return result;
+    } catch (error) {
+        console.error(error);
+        throw new Error(`Diff Failed: ${error.message}`);
+    }
+});
 
-        // 1. Create Folder for this Rule
-        const ruleFolderName = sanitizeFolderName(rule.attributes.name);
-        const specificRuleDir = path.join(rulesBaseDir, ruleFolderName);
-        if (!fs.existsSync(specificRuleDir)) fs.mkdirSync(specificRuleDir, { recursive: true });
+ipcMain.handle('perform-archive-scan', async (event, { propertyId, types, token, creds }) => {
+    const headers = getHeaders(token, creds);
 
-        // 2. Save Rule Settings
-        fs.writeFileSync(path.join(specificRuleDir, 'settings.json'), JSON.stringify(rule, null, 2));
+    const counts = { total: 0 };
 
-        // 3. Fetch Components for this Rule
-        try {
-            const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
-            const compRes = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
-            const components = compRes.data.data;
+    try {
+        if (types.includes('rules')) {
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/rules?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            counts.rules = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
+            counts.total += counts.rules;
+        }
+        if (types.includes('data_elements')) {
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/data_elements?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            counts.data_elements = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
+            counts.total += counts.data_elements;
+        }
+        if (types.includes('extensions')) {
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/extensions?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            counts.extensions = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
+            counts.total += counts.extensions;
+        }
+        // [FIX] Cannot use bulk rule_components (403). Set to N/A.
+        if (types.includes('rule_components')) {
+            counts.rule_components = "N/A (Scanned via Rules)"; 
+        }
+        // [NEW] Environments
+        if (types.includes('environments')) {
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/environments?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            counts.environments = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
+            counts.total += counts.environments;
+        }
+        // [NEW] Libraries
+        if (types.includes('libraries')) {
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/libraries?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            counts.libraries = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
+            counts.total += counts.libraries;
+        }
 
-            // Prepare subfolders
-            ['events', 'conditions', 'actions'].forEach(sub => {
-                const subDir = path.join(specificRuleDir, sub);
-                if (!fs.existsSync(subDir)) fs.mkdirSync(subDir);
-            });
+        return counts;
+    } catch (e) {
+        console.error("Scan Error Details:", e.response?.data || e.message);
+        throw new Error(`Scan failed: ${e.message}`);
+    }
+});
 
-            // 4. Sort Components into Folders
-            for (const comp of components) {
-                const descriptor = comp.attributes.delegate_descriptor_id || "";
-                let targetSubfolder = null;
+ipcMain.handle('perform-archive-run', async (event, { propertyId, targetDir, types, token, creds }) => {
+    const headers = getHeaders(token, creds);
 
-                if (descriptor.includes('events')) targetSubfolder = 'events';
-                else if (descriptor.includes('conditions')) targetSubfolder = 'conditions';
-                else if (descriptor.includes('actions')) targetSubfolder = 'actions';
+    const sendUpdate = (msg, progress) => event.sender.send('archive-progress', { msg, progress });
 
-                if (targetSubfolder) {
-                    const filename = `${comp.id}.json`;
-                    fs.writeFileSync(path.join(specificRuleDir, targetSubfolder, filename), JSON.stringify(comp, null, 2));
+    // Helper to fetch all pages of a resource list
+    async function fetchList(url) {
+        let all = [];
+        let next = url;
+        while (next) {
+            const res = await axios.get(next, { headers, httpsAgent: proxyAgent });
+            all = all.concat(res.data.data);
+            next = res.data.links?.next;
+        }
+        return all;
+    }
+
+    try {
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+        let totalItems = 0;
+        let processedItems = 0;
+
+        // 1. Fetch Lists First (to know total work)
+        const workQueue = [];
+
+        const queueType = async (type, endpoint) => {
+            if (types.includes(type)) {
+                sendUpdate(`Fetching ${type} list...`, 0);
+                try {
+                    const items = await fetchList(`https://reactor.adobe.io/properties/${propertyId}/${endpoint}?page[size]=100`);
+                    workQueue.push(...items.map(item => ({ type, item })));
+                } catch (err) {
+                    console.error(`Failed to list ${type}:`, err.message);
                 }
             }
+        };
 
-        } catch (compErr) {
-            // We DO swallow errors here specifically because one bad rule shouldn't stop the whole property.
-            // But we will log it so you can see it in terminal if needed.
-            console.error(`Warning: Failed to fetch components for rule "${rule.attributes.name}": ${compErr.message}`);
+        await queueType('rules', 'rules');
+        await queueType('data_elements', 'data_elements');
+        await queueType('extensions', 'extensions');
+        // await queueType('rule_components', 'rule_components'); // 403 Forbidden
+        await queueType('environments', 'environments');
+        await queueType('libraries', 'libraries');
+        
+        // Builds (via Libraries, not Environments)
+        if (types.includes('builds')) {
+            sendUpdate("Fetching Libraries for Build scan...", 0);
+            // Get libraries (reuse if already fetched)
+            let libsForBuilds = workQueue.filter(i => i.type === 'libraries').map(i => i.item);
+            if (libsForBuilds.length === 0) {
+                libsForBuilds = await fetchList(`https://reactor.adobe.io/properties/${propertyId}/libraries?page[size]=100`);
+            }
+            
+            for (const lib of libsForBuilds) {
+                try {
+                    const builds = await fetchList(`https://reactor.adobe.io/libraries/${lib.id}/builds?page[size]=100`);
+                    workQueue.push(...builds.map(b => ({ type: 'builds', item: b })));
+                } catch (e) { /* ignore - library may have no builds */ }
+            }
         }
+
+        // Rule Components (via Rules)
+        if (types.includes('rule_components')) {
+            sendUpdate("Fetching Rules to find Components...", 0);
+            // We need rules list. If not already fetched, fetch it.
+            let rulesForComps = [];
+            const existingRules = workQueue.filter(i => i.type === 'rules').map(i => i.item);
+            
+            if (existingRules.length > 0) {
+                rulesForComps = existingRules;
+            } else {
+                rulesForComps = await fetchList(`https://reactor.adobe.io/properties/${propertyId}/rules?page[size]=100`);
+            }
+
+            // Fetch components for each rule
+            for (let r of rulesForComps) {
+                try {
+                    const comps = await fetchList(`https://reactor.adobe.io/rules/${r.id}/rule_components?page[size]=100`);
+                    workQueue.push(...comps.map(c => ({ type: 'rule_components', item: c })));
+                } catch (e) { /* ignore */ }
+            }
+        }
+
+        totalItems = workQueue.length;
+        sendUpdate(`Found ${totalItems} items to archive. Starting...`, 0);
+
+        // 2. Process Queue
+        const CHUNK_SIZE = 5;
+        for (let i = 0; i < workQueue.length; i += CHUNK_SIZE) {
+            const chunk = workQueue.slice(i, i + CHUNK_SIZE);
+            
+            await Promise.all(chunk.map(async (job) => {
+                const { type, item } = job;
+                const itemId = item.id;
+                const safeName = sanitizeFolderName(item.attributes.name || item.attributes.display_name || "unnamed");
+                
+                const itemDir = path.join(targetDir, type, `${safeName}_${itemId}`);
+                if (!fs.existsSync(itemDir)) fs.mkdirSync(itemDir, { recursive: true });
+
+                try {
+                    // Types WITHOUT revisions: save object as-is
+                    // - builds: child of libraries, no revisions
+                    // - libraries: containers, no revisions
+                    // - environments: config objects, no revisions
+                    // - rule_components: revisions are tied to parent Rule, not standalone
+                    const noRevisionTypes = ['builds', 'libraries', 'environments', 'rule_components'];
+                    
+                    if (noRevisionTypes.includes(type)) {
+                        fs.writeFileSync(path.join(itemDir, `${type}_${itemId}.json`), JSON.stringify(item, null, 2));
+                    } else {
+                        // Types WITH revisions: rules, data_elements, extensions
+                        const revisionsUrl = `https://reactor.adobe.io/${type}/${itemId}/revisions`;
+                        const revisions = await fetchList(revisionsUrl);
+
+                        revisions.forEach(rev => {
+                            const revPath = path.join(itemDir, `rev_${rev.id}.json`);
+                            if (!fs.existsSync(revPath)) {
+                                fs.writeFileSync(revPath, JSON.stringify(rev, null, 2));
+                            }
+                        });
+
+                        // Extension Packages: fetch the package definition for each extension
+                        if (type === 'extensions') {
+                            try {
+                                const pkgUrl = `https://reactor.adobe.io/extensions/${itemId}/extension_package`;
+                                const pkgRes = await axios.get(pkgUrl, { headers, httpsAgent: proxyAgent });
+                                const pkg = pkgRes.data.data;
+                                
+                                if (pkg) {
+                                    fs.writeFileSync(path.join(itemDir, `package_${pkg.id}.json`), JSON.stringify(pkg, null, 2));
+                                }
+                            } catch (pkgErr) {
+                                console.error(`Failed to fetch package for extension ${itemId}:`, pkgErr.message);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error(`Failed to archive ${type} ${itemId}:`, e.message);
+                }
+            }));
+
+            processedItems += chunk.length;
+            const pct = Math.round((processedItems / totalItems) * 100);
+            sendUpdate(`Archived ${processedItems}/${totalItems} items...`, pct);
+        }
+
+        return true;
+    } catch (e) {
+        throw new Error(`Archive Run Failed: ${e.message}`);
     }
-}
+});

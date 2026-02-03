@@ -6,361 +6,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&family=Roboto:wght@300;400;500&display=swap"
         rel="stylesheet">
-    <style>
-        :root {
-            --bg-primary: #f4f7f6;
-            --bg-card: #ffffff;
-            --text-main: #2c3e50;
-            --text-muted: #7f8c8d;
-            --accent: #2680eb;
-            --border: #e0e0e0;
-            --input-bg: #ffffff;
-        }
-
-        [data-theme="dark"] {
-            --bg-primary: #121212;
-            --bg-card: #1e1e1e;
-            --text-main: #e0e0e0;
-            --text-muted: #a0a0a0;
-            --accent: #4fa3ff;
-            --border: #333333;
-            --input-bg: #2d2d2d;
-        }
-
-        body {
-            font-family: 'Roboto', sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-main);
-            margin: 0;
-            padding: 40px;
-        }
-
-        /* Loading Overlay */
-        #loading-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            /* Dim background */
-            backdrop-filter: blur(4px);
-            /* Blur effect */
-            z-index: 9999;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 600;
-            font-family: 'Poppins', sans-serif;
-        }
-
-        /* [FIX] Prevent checkboxes from taking full width */
-        input[type="checkbox"] {
-            width: auto !important;
-            /* Override the 100% width */
-            margin: 0 10px 0 0 !important;
-            /* Add space on the right */
-            display: inline-block;
-            vertical-align: middle;
-        }
-
-        /* Ensure the Select All label aligns perfectly */
-        .select-all-container label {
-            display: flex;
-            align-items: center;
-            cursor: pointer;
-            font-weight: 600;
-        }
-
-        .spinner {
-            width: 50px;
-            height: 50px;
-            border: 5px solid rgba(255, 255, 255, 0.3);
-            border-radius: 50%;
-            border-top-color: var(--accent);
-            animation: spin 1s ease-in-out infinite;
-            margin-bottom: 15px;
-        }
-
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
-        /* [NEW] 2-Column Grid for Properties */
-        #property-list {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            /* Two equal columns */
-            gap: 10px;
-            /* Space between items */
-            max-height: 350px;
-            /* Taller scroll area */
-            overflow-y: auto;
-            padding: 5px;
-            background: transparent;
-            /* Remove background from container */
-            border: none;
-        }
-
-        /* Individual Property Card */
-        .prop-item {
-            display: flex;
-            align-items: center;
-            /* Vertically center checkbox with text */
-            padding: 10px 12px;
-            background: var(--input-bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            transition: 0.2s;
-            cursor: pointer;
-        }
-
-        .prop-item:hover {
-            border-color: var(--accent);
-        }
-
-        /* Fix the Checkbox itself */
-        .prop-item input[type="checkbox"] {
-            margin: 0 12px 0 0 !important;
-            /* Force space on right, reset others */
-            width: 18px;
-            height: 18px;
-            accent-color: var(--accent);
-            cursor: pointer;
-        }
-
-        /* Text truncation for long property names */
-        .prop-name {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-size: 13px;
-            font-weight: 500;
-        }
-
-        /* Fix the Bottom Export Options Alignment */
-        .export-options {
-            display: flex;
-            gap: 20px;
-            align-items: center;
-            margin-bottom: 20px;
-            padding: 15px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-        }
-
-        .export-options label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin: 0;
-            cursor: pointer;
-        }
-
-        .export-options input {
-            margin: 0;
-            width: 16px;
-            height: 16px;
-        }
-
-        /* Header */
-        .header-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 20px;
-        }
-
-        .icon-group {
-            display: flex;
-            gap: 10px;
-        }
-
-        /* Icons */
-        .icon-btn {
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 8px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-main);
-            transition: 0.2s;
-        }
-
-        .icon-btn:hover {
-            background: rgba(128, 128, 128, 0.1);
-        }
-
-        .icon-btn svg {
-            width: 20px;
-            height: 20px;
-            fill: currentColor;
-        }
-
-        .icon-bulb {
-            fill: #2c3e50;
-        }
-
-        [data-theme="dark"] .icon-bulb {
-            fill: #f1c40f;
-        }
-
-        /* Settings Panels (Credentials / Company) */
-        .settings-panel {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-            position: relative;
-        }
-
-        .close-btn {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            cursor: pointer;
-            border: none;
-            background: none;
-            font-size: 16px;
-            color: var(--text-muted);
-        }
-
-        /* Tabs */
-        .tab-nav {
-            display: flex;
-            border-bottom: 2px solid var(--border);
-            margin-bottom: 20px;
-        }
-
-        .tab-btn {
-            padding: 10px 20px;
-            background: none;
-            border: none;
-            font-family: 'Poppins', sans-serif;
-            font-weight: 600;
-            color: var(--text-muted);
-            cursor: pointer;
-            border-bottom: 3px solid transparent;
-            margin-bottom: -2px;
-        }
-
-        .tab-btn.active {
-            border-bottom-color: var(--accent);
-            color: var(--accent);
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-        }
-
-        /* Common Elements */
-        .hidden {
-            display: none !important;
-        }
-
-        input,
-        select {
-            width: 100%;
-            padding: 10px;
-            margin: 5px 0 15px;
-            border-radius: 6px;
-            border: 1px solid var(--border);
-            background: var(--input-bg);
-            color: var(--text-main);
-        }
-
-        button.primary {
-            background: var(--accent);
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            width: 100%;
-        }
-
-        .footer {
-            text-align: center;
-            margin-top: 40px;
-            font-size: 12px;
-            color: var(--text-muted);
-        }
-
-        .footer a {
-            color: var(--accent);
-            text-decoration: none;
-            cursor: pointer;
-        }
-
-        /* Environment Comparison Styles */
-        .env-library-info {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-top: 5px;
-            padding: 5px 10px;
-            background: var(--bg-primary);
-            border-radius: 4px;
-            min-height: 20px;
-        }
-
-        .comparison-section {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
-        }
-
-        .comparison-section h4 {
-            font-family: 'Poppins', sans-serif;
-            margin: 0 0 10px 0;
-            color: var(--text-main);
-        }
-
-        .diff-item {
-            padding: 8px 12px;
-            margin: 5px 0;
-            border-radius: 4px;
-            font-size: 13px;
-        }
-
-        .diff-added {
-            background: rgba(46, 204, 113, 0.1);
-            border-left: 3px solid #2ecc71;
-        }
-
-        .diff-removed {
-            background: rgba(231, 76, 60, 0.1);
-            border-left: 3px solid #e74c3c;
-        }
-
-        .diff-modified {
-            background: rgba(241, 196, 15, 0.1);
-            border-left: 3px solid #f1c40f;
-        }
-
-        .diff-identical {
-            background: rgba(149, 165, 166, 0.1);
-            border-left: 3px solid #95a5a6;
-        }
-    </style>
-</head>
-
-<body>
+    <link rel="stylesheet" href="styles.css">
     <div id="loading-overlay" class="hidden">
         <div class="spinner"></div>
         <div id="loading-text">Loading Data...</div>
@@ -375,7 +21,13 @@
             <button class="icon-btn" onclick="togglePanel('company-panel')" title="Select Company">
                 <svg viewBox="0 0 24 24">
                     <path
-                        d="M20 6h-4V4c0-1.11-.89-2-2-2h-4c-1.11 0-2 .89-2 2v2H4c-1.11 0-2 .89-2 2v11c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zM10 4h4v2h-4V4zM5 8h14v11H5V8z" />
+                        d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z" />
+                </svg>
+            </button>
+            <button class="icon-btn" onclick="togglePanel('property-select-panel')" title="Select Properties">
+                <svg viewBox="0 0 24 24">
+                    <path
+                        d="M9.19 6.35c-2.04 2.29-3.44 5.58-3.57 5.89L2 10.69l4.05-4.05c.47-.47 1.15-.68 1.81-.55l1.33.26zM20.3 5.7c-.57-.57-1.4-.73-2.12-.49l-1.39.46c-.63.21-1.33.04-1.8-.43l-4.05-4.05-1.54 3.61c-.32.13-3.6 1.53-5.89 3.57 2.48 2.48 3.96 6.54 3.96 6.54l1.83 1.83 2.55-6.55c.16.03.32.05.48.05 1.1 0 2.2-.42 3.03-1.25.84-.84 1.25-1.94 1.25-3.03 0-.16-.02-.32-.05-.48l6.55-2.55-1.84-1.83s-4.06-1.48-6.54-3.96zM13 14l-2.55 6.55L14 22l4.05-4.05c.47-.47.64-1.15.43-1.8l-.46-1.39c-.24-.71-.08-1.55.49-2.12l1.83-1.84-6.55 2.55c.03.16.05.32.05.48 0 1.1-.42 2.2-1.25 3.03-.83.84-1.93 1.26-3.03 1.26-.16 0-.32-.02-.48-.05z" />
                 </svg>
             </button>
             <button class="icon-btn" onclick="togglePanel('creds-panel')" title="Manage Credentials">
@@ -409,26 +61,36 @@
         <select id="company-select"></select>
         <button class="primary" onclick="saveCompanySelection()">Save Company</button>
     </div>
+    
+    <div id="property-select-panel" class="settings-panel hidden">
+        <button class="close-btn" onclick="togglePanel('property-select-panel')">✕</button>
+        <h3>Select Properties</h3>
+        <div class="select-all-container"
+            style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border);">
+            <label>
+                <input type="checkbox" id="select-all-toggle" onchange="toggleSelectAll()">
+                Select All / Select None
+            </label>
+        </div>
+        <div id="property-list"
+            style="background:var(--input-bg); border:1px solid var(--border); height:250px; overflow-y:auto; padding:10px; margin-bottom:15px; border-radius:6px;">
+        </div>
+        <button class="primary" onclick="togglePanel('property-select-panel')">Done</button>
+    </div>
 
     <div id="main-interface" class="hidden">
 
         <div class="tab-nav">
             <button class="tab-btn active" onclick="switchTab('tab-export')">Export Manager</button>
             <button class="tab-btn" onclick="switchTab('tab-compare')">Environment Comparison</button>
+            <button class="tab-btn" onclick="switchTab('tab-sync')">Developer Sync</button>
+            <button class="tab-btn" onclick="switchTab('tab-archive')">History Archive</button>
         </div>
 
         <div id="tab-export" class="tab-content active">
-            <div class="select-all-container"
-                style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border);">
-                <label>
-                    <input type="checkbox" id="select-all-toggle" onchange="toggleSelectAll()">
-                    Select All / Select None
-                </label>
-            </div>
-            <div id="property-list"
-                style="background:var(--input-bg); border:1px solid var(--border); height:250px; overflow-y:auto; padding:10px; margin-bottom:15px; border-radius:6px;">
-            </div>
-
+            <p style="font-size: 13px; color: var(--text-muted); padding: 10px; border: 1px dashed var(--border); border-radius: 4px; margin-bottom: 15px;">
+                Property selection is managed via the **Select Properties** button in the header.
+            </p>
             <div class="export-options">
                 <label><input type="checkbox" id="opt-full-export" value="full" checked> Full Export</label>
                 <label><input type="checkbox" id="opt-library-export" value="library"> Latest Library</label>
@@ -441,16 +103,25 @@
             <label>Select Property</label>
             <select id="compare-prop-select" onchange="loadEnvironmentsForCompare()"></select>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 15px;">
-                <div>
-                    <label>Environment A (Base)</label>
-                    <select id="env-a-select" class="env-select" onchange="updateEnvironmentLibraryInfo('a')"></select>
-                    <div id="env-a-library-info" class="env-library-info"></div>
+            <div style="margin-top: 15px; margin-bottom: 10px; background: var(--input-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border); display: flex; gap: 20px; align-items: center;">
+                <span style="font-weight: 600; font-size: 13px;">Compare Mode:</span>
+                <select id="compare-mode-select" onchange="handleCompareModeChange()" style="margin:0; width:auto; flex-grow:1;">
+                    <option value="environments">Compare Two Environments (e.g. Dev vs Stage)</option>
+                    <option value="libraries">Compare Two Libraries</option>
+                    <option value="history">Production History (Current vs Previous)</option>
+                </select>
+            </div>
+
+            <div id="compare-inputs-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 15px;">
+                <div id="col-a">
+                    <label id="lbl-env-a">Environment A (Base)</label>
+                    <select id="envA-select" class="env-select" onchange="updateComparisonInfo('envA-select', 'envA-library-info')"></select>
+                    <div id="envA-library-info" class="env-library-info"></div>
                 </div>
-                <div>
-                    <label>Environment B (Compare)</label>
-                    <select id="env-b-select" class="env-select" onchange="updateEnvironmentLibraryInfo('b')"></select>
-                    <div id="env-b-library-info" class="env-library-info"></div>
+                <div id="col-b">
+                    <label id="lbl-env-b">Environment B (Compare)</label>
+                    <select id="envB-select" class="env-select" onchange="updateComparisonInfo('envB-select', 'envB-library-info')"></select>
+                    <div id="envB-library-info" class="env-library-info"></div>
                 </div>
             </div>
 
@@ -458,29 +129,108 @@
                 Environments</button>
 
             <div id="comparison-results" class="hidden" style="margin-top: 30px;">
-                <h3 style="font-family: 'Poppins', sans-serif; margin-bottom: 15px;">Comparison Results</h3>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3 style="font-family: 'Poppins', sans-serif; margin: 0;">Comparison Results</h3>
+                    <button class="primary" style="width: auto; margin: 0; background: #27ae60;" onclick="downloadComparisonNotes()">⬇️ Download Release Notes</button>
+                </div>
                 <div id="comparison-content"></div>
+            </div>
+        </div>
+        <div id="tab-sync" class="tab-content">
+            <div style="background: var(--bg-card); padding: 20px; border-radius: 8px; border: 1px solid var(--border);">
+                <h3 style="margin-top:0;">1. Configuration</h3>
+                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 15px; padding: 10px; border: 1px dashed var(--border); border-radius: 4px;">
+                    Property selection is managed by the **Select Properties** button in the header.
+                </p>
+                <label style="display:block;">Local Project Folder</label>
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="sync-folder-path" readonly placeholder="No folder selected..." style="margin-bottom:0;">
+                    <button class="primary" style="width:auto;" onclick="selectSyncFolder()">Browse</button>
+                </div>
+            </div>
+
+            <div style="background: var(--bg-card); padding: 20px; border-radius: 8px; border: 1px solid var(--border); margin-top: 20px;">
+                <h3 style="margin-top:0;">2. Actions</h3>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+                    <button class="primary" onclick="initSyncDownload()">⬇️ Initialize (Download All)</button>
+                    <button class="primary" style="background: #27ae60;" onclick="checkSyncStatus()">🔄 Check Status (Diff)</button>
+                </div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <h3 style="margin-top:0;">Console Output</h3>
+                <pre id="sync-console" style="background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 6px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;">Waiting for command...</pre>
+            </div>
+        </div>
+
+        <div id="tab-archive" class="tab-content">
+            <div style="background: var(--bg-card); padding: 20px; border-radius: 8px; border: 1px solid var(--border);">
+                <h3 style="margin-top:0;">1. Archive Configuration</h3>
+                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 15px; padding: 10px; border: 1px dashed var(--border); border-radius: 4px;">
+                    Property selection is managed by the **Select Properties** button in the header.
+                </p>
+                <label style="display:block;">Archive Location</label>
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="archive-folder-path" readonly placeholder="No folder selected..." style="margin-bottom:0;">
+                    <button class="primary" style="width:auto;" onclick="selectArchiveFolder()">Browse</button>
+                </div>
+            </div>
+
+            <div style="background: var(--bg-card); padding: 20px; border-radius: 8px; border: 1px solid var(--border); margin-top: 20px;">
+                <h3 style="margin-top:0;">2. Scope & Scan</h3>
+                <p style="font-size:13px; color:var(--text-muted); margin-bottom:15px;">
+                    Select resource types to scan. Scanning will count available items. Archiving will download ALL historical revisions for each item.
+                </p>
+                
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+                    <label class="prop-item" style="cursor:pointer;">
+                        <input type="checkbox" id="chk-scan-rules" checked> Rules <span id="count-rules" style="float:right; color:var(--text-muted)">-</span>
+                    </label>
+                    <label class="prop-item" style="cursor:pointer;">
+                        <input type="checkbox" id="chk-scan-de" checked> Data Elements <span id="count-de" style="float:right; color:var(--text-muted)">-</span>
+                    </label>
+                    <label class="prop-item" style="cursor:pointer;">
+                        <input type="checkbox" id="chk-scan-ext" checked> Extensions <span id="count-ext" style="float:right; color:var(--text-muted)">-</span>
+                    </label>
+                    <label class="prop-item" style="cursor:pointer;">
+                        <input type="checkbox" id="chk-scan-rc" checked> Rule Components <span id="count-rc" style="float:right; color:var(--text-muted)">-</span>
+                    </label>
+                    <label class="prop-item" style="cursor:pointer;">
+                        <input type="checkbox" id="chk-scan-env" checked> Environments <span id="count-env" style="float:right; color:var(--text-muted)">-</span>
+                    </label>
+                    <label class="prop-item" style="cursor:pointer;">
+                        <input type="checkbox" id="chk-scan-lib" checked> Libraries <span id="count-lib" style="float:right; color:var(--text-muted)">-</span>
+                    </label>
+                </div>
+
+                <div style="display:flex; gap:15px; margin-top:20px;">
+                    <button class="primary" style="background:#f39c12;" onclick="scanForArchive()">🔍 Scan Property</button>
+                    <button class="primary" id="btn-start-archive" disabled onclick="startArchive()">📦 Start Archive</button>
+                </div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <h3 style="margin-top:0;">Archive Log</h3>
+                <div id="archive-progress-bar" style="height:4px; background:#eee; margin-bottom:10px; width:100%; border-radius:2px; overflow:hidden;">
+                    <div id="archive-progress-fill" style="height:100%; width:0%; background:var(--accent); transition: width 0.3s;"></div>
+                </div>
+                <pre id="archive-console" style="background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 6px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;">Ready to scan.</pre>
             </div>
         </div>
     </div>
 
-    <div class="footer">
-        <p>Built by <a id="credit-link"
-                href="https://www.andylunsford.com?utm_source=github&utm_medium=application">Andy Lunsford</a></p>
+    <!-- Diff Modal -->
+    <div id="diff-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="diff-modal-title">Difference</h3>
+                <button class="close-btn" onclick="closeDiffModal()">✕</button>
+            </div>
+            <pre id="diff-content" style="background: #1e1e1e; color: #fff; padding: 15px; border-radius: 6px; height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap;"></pre>
+        </div>
     </div>
 
     <script src="renderer.js"></script>
-    <script>
-        // Simple Theme Logic
-        const savedTheme = localStorage.getItem('theme') || 'light';
-        document.documentElement.setAttribute('data-theme', savedTheme);
-        function toggleTheme() {
-            const current = document.documentElement.getAttribute('data-theme');
-            const target = current === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', target);
-            localStorage.setItem('theme', target);
-        }
-    </script>
 </body>
 
 </html>
