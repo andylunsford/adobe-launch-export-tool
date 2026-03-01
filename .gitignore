@@ -138,3 +138,7 @@ reactor_vars.json
 .DS_Store
 .gitattributes
 export/
+
+# Playwright
+test-results/
+playwright-report/
