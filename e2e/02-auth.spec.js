@@ -1,53 +1,46 @@
 'use strict';
 
 /**
- * Suite 2 – Authentication flow
- * Requires env vars: ADOBE_CLIENT_ID, ADOBE_CLIENT_SECRET, ADOBE_ORG_ID
+ * Suite 2 – Authentication flow  (mock-based, no network required)
  */
 
-const { test, expect, loginWithEnvCreds } = require('./fixtures');
+const { test, expect, loginWithMocks, injectIPCMocks, MOCK_DATA } = require('./fixtures');
 
 test.describe('Authentication', () => {
-    test.beforeEach(async ({ window }) => {
-        // Skip entire suite if credentials are absent
-        if (!process.env.ADOBE_CLIENT_ID || !process.env.ADOBE_CLIENT_SECRET || !process.env.ADOBE_ORG_ID) {
-            test.skip(true, 'Skipping auth tests: ADOBE_CLIENT_ID / ADOBE_CLIENT_SECRET / ADOBE_ORG_ID not set');
-        }
+    test('login succeeds and shows Connected status', async ({ mockedWindow }) => {
+        await loginWithMocks(mockedWindow);
+        await expect(mockedWindow.locator('#login-status')).toContainText('Connected');
     });
 
-    test('login succeeds and shows Connected status', async ({ window }) => {
-        await loginWithEnvCreds(window);
-        await expect(window.locator('#login-status')).toContainText('Connected');
+    test('company panel appears after successful login', async ({ mockedWindow }) => {
+        await loginWithMocks(mockedWindow);
+        // After success the creds panel auto-closes and the company panel auto-opens
+        await expect(mockedWindow.locator('#company-panel')).not.toHaveClass(/hidden/, { timeout: 10_000 });
     });
 
-    test('company panel appears after successful login', async ({ window }) => {
-        await loginWithEnvCreds(window);
-        // The credentials panel auto-closes and company panel auto-opens
-        await expect(window.locator('#company-panel')).not.toHaveClass(/hidden/, { timeout: 15_000 });
+    test('company dropdown is populated with mock companies after login', async ({ mockedWindow }) => {
+        await loginWithMocks(mockedWindow);
+        await expect(mockedWindow.locator('#company-panel')).not.toHaveClass(/hidden/, { timeout: 10_000 });
+
+        // Placeholder + 2 mock companies = 3 options
+        const options = mockedWindow.locator('#company-select option');
+        await expect(options).toHaveCount(MOCK_DATA.companies.length + 1 /* placeholder */);
+        await expect(options.nth(1)).toHaveText(MOCK_DATA.companies[0].attributes.name);
     });
 
-    test('company dropdown is populated after login', async ({ window }) => {
-        await loginWithEnvCreds(window);
-        await expect(window.locator('#company-panel')).not.toHaveClass(/hidden/, { timeout: 15_000 });
+    test('wrong credentials show an error message', async ({ electronApp, window }) => {
+        // Override login to return failure for this test only
+        await injectIPCMocks(electronApp, 'fail');
 
-        const options = window.locator('#company-select option');
-        // At minimum the placeholder option + at least one real company
-        await expect(options).toHaveCount({ minimum: 2 }, { timeout: 15_000 });
-    });
-
-    test('wrong credentials show error message', async ({ window }) => {
-        // Open creds panel
-        await window.locator('button[onclick="togglePanel(\'creds-panel\')"]').click();
-
-        await window.locator('#clientId').fill('bad-client-id');
+        await window.locator('button.icon-btn[title="Manage Credentials"]').click();
+        await window.locator('#clientId').fill('bad-client');
         await window.locator('#clientSecret').fill('bad-secret');
         await window.locator('#orgId').fill('bad-org@AdobeOrg');
-
         await window.locator('button.primary[onclick="loginAndSave()"]').click();
 
-        // Should show an error, not "Connected"
         const status = window.locator('#login-status');
-        await expect(status).not.toBeEmpty({ timeout: 30_000 });
+        await expect(status).not.toBeEmpty({ timeout: 15_000 });
         await expect(status).not.toContainText('Connected');
+        await expect(status).toContainText('Error');
     });
 });

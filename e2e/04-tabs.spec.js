@@ -1,113 +1,109 @@
 'use strict';
 
 /**
- * Suite 4 – Tab navigation & feature smoke tests
- * Requires env vars: ADOBE_CLIENT_ID, ADOBE_CLIENT_SECRET, ADOBE_ORG_ID
- *
- * These tests log in, select the first company, and verify each tab's
- * UI structure and key interactive elements without triggering
- * long-running downloads or destructive actions.
+ * Suite 4 – Tab navigation & feature smoke tests  (mock-based, no network required)
  */
 
-const { test, expect, loginWithEnvCreds } = require('./fixtures');
+const { test, expect, loginWithMocks, MOCK_DATA } = require('./fixtures');
 
-/** Shared setup: log in and select first company so main interface is visible. */
-async function setupMainInterface(window) {
-    await loginWithEnvCreds(window);
-    await expect(window.locator('#company-panel')).not.toHaveClass(/hidden/, { timeout: 15_000 });
-    await window.locator('#company-select').selectOption({ index: 1 });
-    await window.locator('button.primary[onclick="saveCompanySelection()"]').click();
-    await expect(window.locator('#main-interface')).not.toHaveClass(/hidden/, { timeout: 30_000 });
+/** Shared setup: log in via mocks and select the first company. */
+async function setupMainInterface(win) {
+    await loginWithMocks(win);
+    await expect(win.locator('#company-panel')).not.toHaveClass(/hidden/, { timeout: 10_000 });
+    await win.locator('#company-select').selectOption({ index: 1 });
+    await win.locator('button.primary[onclick="saveCompanySelection()"]').click();
+    await expect(win.locator('#main-interface')).not.toHaveClass(/hidden/, { timeout: 10_000 });
 }
 
 test.describe('Tab navigation', () => {
-    test.beforeEach(async ({ window }) => {
-        if (!process.env.ADOBE_CLIENT_ID || !process.env.ADOBE_CLIENT_SECRET || !process.env.ADOBE_ORG_ID) {
-            test.skip(true, 'Skipping: credentials env vars not set');
-        }
+    test('four tabs are rendered', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await expect(mockedWindow.locator('.tab-btn')).toHaveCount(4);
     });
 
-    test('four tabs are rendered', async ({ window }) => {
-        await setupMainInterface(window);
-        const tabs = window.locator('.tab-btn');
-        await expect(tabs).toHaveCount(4);
+    test('Export Manager tab is active by default', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await expect(mockedWindow.locator('#tab-export')).toHaveClass(/active/);
     });
 
-    test('Export Manager tab is active by default', async ({ window }) => {
-        await setupMainInterface(window);
-        await expect(window.locator('#tab-export')).toHaveClass(/active/);
+    test('switching to Environment Comparison tab shows its content', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
+        await expect(mockedWindow.locator('#tab-compare')).toHaveClass(/active/);
+        await expect(mockedWindow.locator('#compare-prop-select')).toBeVisible();
+        await expect(mockedWindow.locator('#compare-mode-select')).toBeVisible();
     });
 
-    test('switching to Environment Comparison tab shows its content', async ({ window }) => {
-        await setupMainInterface(window);
-        await window.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
-        await expect(window.locator('#tab-compare')).toHaveClass(/active/);
-        await expect(window.locator('#compare-prop-select')).toBeVisible();
-        await expect(window.locator('#compare-mode-select')).toBeVisible();
+    test('switching to Developer Sync tab shows its content', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('.tab-btn', { hasText: 'Developer Sync' }).click();
+        await expect(mockedWindow.locator('#tab-sync')).toHaveClass(/active/);
+        await expect(mockedWindow.locator('#sync-folder-path')).toBeVisible();
+        await expect(mockedWindow.locator('#sync-console')).toBeVisible();
     });
 
-    test('switching to Developer Sync tab shows its content', async ({ window }) => {
-        await setupMainInterface(window);
-        await window.locator('.tab-btn', { hasText: 'Developer Sync' }).click();
-        await expect(window.locator('#tab-sync')).toHaveClass(/active/);
-        await expect(window.locator('#sync-folder-path')).toBeVisible();
-        await expect(window.locator('#sync-console')).toBeVisible();
-    });
-
-    test('switching to History Archive tab shows its content', async ({ window }) => {
-        await setupMainInterface(window);
-        await window.locator('.tab-btn', { hasText: 'History Archive' }).click();
-        await expect(window.locator('#tab-archive')).toHaveClass(/active/);
-        await expect(window.locator('#archive-folder-path')).toBeVisible();
-        await expect(window.locator('#archive-console')).toBeVisible();
+    test('switching to History Archive tab shows its content', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('.tab-btn', { hasText: 'History Archive' }).click();
+        await expect(mockedWindow.locator('#tab-archive')).toHaveClass(/active/);
+        await expect(mockedWindow.locator('#archive-folder-path')).toBeVisible();
+        await expect(mockedWindow.locator('#archive-console')).toBeVisible();
     });
 });
 
 test.describe('Export Manager tab', () => {
-    test.beforeEach(async ({ window }) => {
-        if (!process.env.ADOBE_CLIENT_ID || !process.env.ADOBE_CLIENT_SECRET || !process.env.ADOBE_ORG_ID) {
-            test.skip(true, 'Skipping: credentials env vars not set');
-        }
+    test('Full Export checkbox is pre-checked, Latest Library is unchecked', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await expect(mockedWindow.locator('#opt-full-export')).toBeChecked();
+        await expect(mockedWindow.locator('#opt-library-export')).not.toBeChecked();
     });
 
-    test('export options checkboxes are present and Full Export is pre-checked', async ({ window }) => {
-        await setupMainInterface(window);
-        const fullExport = window.locator('#opt-full-export');
-        const libExport  = window.locator('#opt-library-export');
-        await expect(fullExport).toBeVisible();
-        await expect(libExport).toBeVisible();
-        await expect(fullExport).toBeChecked();
-        await expect(libExport).not.toBeChecked();
-    });
-
-    test('Download Selected button is present', async ({ window }) => {
-        await setupMainInterface(window);
-        await expect(window.locator('button[onclick="startExportJob()"]')).toBeVisible();
+    test('Download Selected button is present', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await expect(mockedWindow.locator('button[onclick="startExportJob()"]')).toBeVisible();
     });
 });
 
 test.describe('Environment Comparison tab', () => {
-    test.beforeEach(async ({ window }) => {
-        if (!process.env.ADOBE_CLIENT_ID || !process.env.ADOBE_CLIENT_SECRET || !process.env.ADOBE_ORG_ID) {
-            test.skip(true, 'Skipping: credentials env vars not set');
+    test('compare mode selector has three options', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
+        await expect(mockedWindow.locator('#compare-mode-select option')).toHaveCount(3);
+    });
+
+    test('property dropdown in compare tab reflects selected properties', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+
+        // Select all properties in the property panel first
+        await mockedWindow.locator('button.icon-btn[title="Select Properties"]').click();
+        await expect(mockedWindow.locator('#property-select-panel')).not.toHaveClass(/hidden/);
+        await expect(mockedWindow.locator('#property-list .prop-item').first()).toBeVisible({ timeout: 10_000 });
+        await mockedWindow.locator('#select-all-toggle').check();
+        await mockedWindow.locator('#property-select-panel button.primary').click(); // Done
+
+        // Now switch to compare tab
+        await mockedWindow.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
+        await expect(mockedWindow.locator('#tab-compare')).toHaveClass(/active/);
+
+        // Dropdown should have one option per selected property + 1 placeholder
+        const opts = mockedWindow.locator('#compare-prop-select option');
+        await expect(opts).toHaveCount(MOCK_DATA.properties.length + 1, { timeout: 10_000 });
+    });
+});
+
+test.describe('History Archive tab', () => {
+    test('all resource-type checkboxes are present and pre-checked', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('.tab-btn', { hasText: 'History Archive' }).click();
+
+        for (const id of ['chk-scan-rules', 'chk-scan-de', 'chk-scan-ext', 'chk-scan-rc', 'chk-scan-env', 'chk-scan-lib']) {
+            await expect(mockedWindow.locator(`#${id}`)).toBeChecked();
         }
     });
 
-    test('compare mode selector has three options', async ({ window }) => {
-        await setupMainInterface(window);
-        await window.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
-
-        const options = window.locator('#compare-mode-select option');
-        await expect(options).toHaveCount(3);
-    });
-
-    test('property dropdown in compare tab is populated', async ({ window }) => {
-        await setupMainInterface(window);
-        await window.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
-
-        // The compare-prop-select is populated by the same properties already loaded
-        const opts = window.locator('#compare-prop-select option');
-        await expect(opts.first()).toBeVisible({ timeout: 15_000 });
-        expect(await opts.count()).toBeGreaterThan(0);
+    test('Start Archive button is initially disabled', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('.tab-btn', { hasText: 'History Archive' }).click();
+        await expect(mockedWindow.locator('#btn-start-archive')).toBeDisabled();
     });
 });
