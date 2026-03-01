@@ -5,6 +5,7 @@
   "main": "main.js",
   "author": "Andy Lunsford <https://www.andylunsford.com>",
   "scripts": {
+    "test": "jest",
     "start": "electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder -mwl",
@@ -25,7 +26,9 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["universal"]
+          "arch": [
+            "universal"
+          ]
         }
       ],
       "icon": "build/icon.png",
@@ -36,7 +39,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.png"
@@ -45,7 +50,10 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "category": "Development"
@@ -56,6 +64,7 @@
   },
   "devDependencies": {
     "electron": "^28.0.0",
-    "electron-builder": "^24.9.1"
+    "electron-builder": "^24.9.1",
+    "jest": "^30.2.0"
   }
 }
