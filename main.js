@@ -957,9 +957,9 @@ async function rateLimitedGet(url, headers, sendUpdate) {
     } catch (e) {
         if (e.response?.status !== 429) throw e;
         // First 429 — countdown then retry
-        const retryAfter = parseInt(e.response.headers['retry-after'] ?? '60', 10);
+        const retryAfter = parseInt(e.response.headers['retry-after'], 10) || 60;
         for (let remaining = retryAfter; remaining > 0; remaining--) {
-            sendUpdate(`⏸ Rate limited — retrying in ${remaining}s…`, null);
+            sendUpdate?.(`⏸ Rate limited — retrying in ${remaining}s…`, null);
             await new Promise(r => setTimeout(r, 1000));
         }
         try {
