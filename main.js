@@ -992,7 +992,7 @@ async function archiveFetchList(url, headers, sendUpdate) {
  * Returns { processedItems, totalItems } on success.
  * Throws Error('RATE_LIMIT_EXHAUSTED') with .resumeIndex set to the failing chunk's start.
  */
-async function runArchiveQueue({ workQueue, startIndex, processedItems, totalItems, propertyId, targetDir, headers, sendUpdate }) {
+async function runArchiveQueue({ workQueue, startIndex, processedItems, totalItems, targetDir, headers, sendUpdate }) {
     let processed = processedItems;
 
     for (let i = startIndex; i < workQueue.length; i += ARCHIVE_CHUNK_SIZE) {
