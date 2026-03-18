@@ -70,12 +70,33 @@ async function loadEnvironmentsForCompare() {
             });
         });
 
+        await refreshCacheStatus();
+
     } catch (e) {
         alert("Error loading environments: " + e.message);
     } finally {
         ui.hideLoading();
     }
 }
+
+// --- Refresh Cache Status ---
+async function refreshCacheStatus() {
+    const propertyId = document.getElementById('compare-prop-select').value;
+    if (!propertyId) return;
+    const stats = await ipcRenderer.invoke('get-cache-stats', { propertyId });
+    const badge = document.getElementById('cache-status-badge');
+    if (!stats || stats.rules === 0) {
+        badge.textContent = 'Cache: empty';
+        badge.style.color = 'var(--danger, #e74c3c)';
+    } else {
+        const age = stats.oldest_cached_at
+            ? Math.round((Date.now() / 1000 - stats.oldest_cached_at) / 60) + ' min ago'
+            : 'unknown';
+        badge.textContent = `Cache: ${stats.rules} rules, ${stats.data_elements} DEs — ${age}`;
+        badge.style.color = 'var(--success, #27ae60)';
+    }
+}
+window.refreshCacheStatus = refreshCacheStatus;
 
 // --- Update Info Display on Selection Change ---
 function updateComparisonInfo(selectId, infoId) {
@@ -140,12 +161,14 @@ async function performEnvironmentComparison() {
         entityAName = document.getElementById('envA-select').options[document.getElementById('envA-select').selectedIndex].text;
         entityBName = document.getElementById('envB-select').options[document.getElementById('envB-select').selectedIndex].text;
 
+        const useCache = document.getElementById('chk-use-cache').checked;
         const result = await ipcRenderer.invoke('perform-environment-comparison', {
             token: ui.getGlobalToken(),
             creds: ui.getCurrentCreds(),
             envAId,
             envBId,
-            mode
+            mode,
+            useCache
         });
 
         currentComparison = result;
@@ -162,7 +185,14 @@ async function performEnvironmentComparison() {
 function displayComparisonResults(result) {
     const container = document.getElementById('comparison-content');
     container.innerHTML = '';
-    
+
+    if (result.fromCache) {
+        const notice = document.createElement('div');
+        notice.style.cssText = 'font-size:12px; color:var(--text-muted); margin-bottom:10px;';
+        notice.textContent = 'Results from local cache. Uncheck "Use Cached Data" to fetch fresh.';
+        container.appendChild(notice);
+    }
+
     document.getElementById('comparison-results').classList.remove('hidden');
 
     const resourceTypes = [
@@ -361,6 +391,7 @@ window.updateComparisonInfo = updateComparisonInfo;
 window.handleCompareModeChange = handleCompareModeChange; // NEW
 window.performEnvironmentComparison = performEnvironmentComparison;
 window.downloadComparisonNotes = downloadComparisonNotes; // NEW
+window.refreshCacheStatus = refreshCacheStatus;
 window.closeDiffModal = closeDiffModal; // Added to enable closing from HTML button
 
 // --- Module Exports ---
@@ -371,5 +402,6 @@ module.exports = {
     handleCompareModeChange, // NEW
     performEnvironmentComparison,
     downloadComparisonNotes, // NEW
+    refreshCacheStatus,
     closeDiffModal
 };
