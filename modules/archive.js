@@ -129,8 +129,7 @@ async function startArchive() {
             ui.logArchive(`[${property.name}] ✅ Archive Complete!`, 100);
         }
 
-        if (!document.getElementById('btn-resume-archive').style.display ||
-            document.getElementById('btn-resume-archive').style.display === 'none') {
+        if (document.getElementById('btn-resume-archive').style.display === 'none') {
             ui.logArchive('\n✅ All Archiving Runs Complete!', 100);
             document.getElementById('btn-start-archive').disabled = false;
         }
