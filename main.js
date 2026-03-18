@@ -920,22 +920,77 @@ ipcMain.handle('perform-archive-scan', async (event, { propertyId, types, token,
     }
 });
 
+// ---------------------------------------------------------------------------
+// Archive: module-level helpers and state
+// ---------------------------------------------------------------------------
+
+const ARCHIVE_CHUNK_SIZE = 5;
+
+let pendingArchive = null;
+// Shape when set:
+// {
+//   workQueue: Array<{ type, item }>,
+//   resumeIndex: number,        // chunk-aligned start of failed chunk
+//   processedItems: number,
+//   totalItems: number,
+//   propertyId: string,
+//   targetDir: string,
+//   types: string[],
+//   token: string,
+//   creds: object
+// }
+
+/**
+ * Wraps axios.get with rate-limit handling.
+ *   First 429  → wait Retry-After (or 60 s), send countdown, retry once
+ *   Second 429 → throw Error('RATE_LIMIT_EXHAUSTED')
+ *   Other err  → re-throw unchanged
+ */
+async function rateLimitedGet(url, headers, sendUpdate) {
+    async function attempt() {
+        return axios.get(url, { headers, httpsAgent: proxyAgent });
+    }
+
+    let res;
+    try {
+        res = await attempt();
+    } catch (e) {
+        if (e.response?.status !== 429) throw e;
+        // First 429 — countdown then retry
+        const retryAfter = parseInt(e.response.headers['retry-after'] ?? '60', 10);
+        for (let remaining = retryAfter; remaining > 0; remaining--) {
+            sendUpdate(`⏸ Rate limited — retrying in ${remaining}s…`, null);
+            await new Promise(r => setTimeout(r, 1000));
+        }
+        try {
+            res = await attempt();
+        } catch (e2) {
+            if (e2.response?.status === 429) throw new Error('RATE_LIMIT_EXHAUSTED');
+            throw e2;
+        }
+    }
+    return res;
+}
+
+/**
+ * Module-scoped fetchList — used by both perform-archive-run and runArchiveQueue.
+ * Replaces the identical local function that was inside perform-archive-run.
+ */
+async function archiveFetchList(url, headers, sendUpdate) {
+    let all = [];
+    let next = url;
+    while (next) {
+        const res = await rateLimitedGet(next, headers, sendUpdate);
+        all = all.concat(res.data.data);
+        next = res.data.links?.next;
+    }
+    return all;
+}
+
 ipcMain.handle('perform-archive-run', async (event, { propertyId, targetDir, types, token, creds }) => {
     const headers = getHeaders(token, creds);
 
     const sendUpdate = (msg, progress) => event.sender.send('archive-progress', { msg, progress });
-
-    // Helper to fetch all pages of a resource list
-    async function fetchList(url) {
-        let all = [];
-        let next = url;
-        while (next) {
-            const res = await axios.get(next, { headers, httpsAgent: proxyAgent });
-            all = all.concat(res.data.data);
-            next = res.data.links?.next;
-        }
-        return all;
-    }
 
     try {
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
