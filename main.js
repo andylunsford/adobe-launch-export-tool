@@ -24,7 +24,8 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-    db.initDb();
+    try { db.initDb(); }
+    catch (e) { console.error('[DB] initDb failed (cache disabled):', e.message); }
     createWindow();
 });
 
@@ -534,6 +535,9 @@ ipcMain.handle('perform-export', async (event, args) => {
                 const targetDir = path.join(propBaseDir, "Full Export");
                 if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
+                try { db.upsertProperty(prop); }
+                catch (e) { console.error('[DB] upsertProperty:', e.message); }
+
                 sendStatus(`Fetching Rules for ${prop.name}...`);
                 const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
                 try { db.upsertRules(rulesRes.data.data, prop.id); }
@@ -585,6 +589,9 @@ ipcMain.handle('perform-export', async (event, args) => {
 
             // --- OPTION 2: Library Export ---
             if (types.includes('library')) {
+                try { db.upsertProperty(prop); }
+                catch (e) { console.error('[DB] upsertProperty:', e.message); }
+
                 sendStatus(`Locating Production Library for ${prop.name}...`);
 
                 const envRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/environments`, { headers, httpsAgent: proxyAgent });
@@ -611,24 +618,43 @@ ipcMain.handle('perform-export', async (event, args) => {
 
                         // Rules
                         const rulesRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rules`, { headers, httpsAgent: proxyAgent });
-                        try { db.upsertLibrary(libRes.data.data, prop.id); db.upsertRules(rulesRes.data.data, prop.id); db.linkLibraryRules(libraryId, rulesRes.data.data); }
-                        catch (e) { console.error('[DB] library rules cache:', e.message); }
+                        try { db.upsertLibrary(libRes.data.data, prop.id); }
+                        catch (e) { console.error('[DB] library upsertLibrary:', e.message); }
+                        try { db.upsertRules(rulesRes.data.data, prop.id); }
+                        catch (e) { console.error('[DB] library upsertRules:', e.message); }
+                        try { db.linkLibraryRules(libraryId, rulesRes.data.data); }
+                        catch (e) { console.error('[DB] library linkLibraryRules:', e.message); }
                         for (const r of rulesRes.data.data) await reactorCore.toFiles(r, targetDir, fetchPkg);
 
                         // Data Elements
                         const deRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/data_elements`, { headers, httpsAgent: proxyAgent });
-                        try { db.upsertDataElements(deRes.data.data, prop.id); db.linkLibraryDataElements(libraryId, deRes.data.data); }
-                        catch (e) { console.error('[DB] library DE cache:', e.message); }
+                        try { db.upsertDataElements(deRes.data.data, prop.id); }
+                        catch (e) { console.error('[DB] library upsertDataElements:', e.message); }
+                        try { db.linkLibraryDataElements(libraryId, deRes.data.data); }
+                        catch (e) { console.error('[DB] library linkLibraryDataElements:', e.message); }
                         for (const d of deRes.data.data) await reactorCore.toFiles(d, targetDir, fetchPkg);
 
                         // Extensions
                         const extRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/extensions`, { headers, httpsAgent: proxyAgent });
-                        try { db.upsertExtensions(extRes.data.data, prop.id); db.linkLibraryExtensions(libraryId, extRes.data.data); }
-                        catch (e) { console.error('[DB] library ext cache:', e.message); }
+                        try { db.upsertExtensions(extRes.data.data, prop.id); }
+                        catch (e) { console.error('[DB] library upsertExtensions:', e.message); }
+                        try { db.linkLibraryExtensions(libraryId, extRes.data.data); }
+                        catch (e) { console.error('[DB] library linkLibraryExtensions:', e.message); }
                         for (const e of extRes.data.data) await reactorCore.toFiles(e, targetDir, fetchPkg);
 
                         // Rule Components
                         const rcRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rule_components`, { headers, httpsAgent: proxyAgent });
+                        try {
+                            const byRule = {};
+                            for (const rc of rcRes.data.data) {
+                                const ruleId = rc.relationships?.rule?.data?.id ?? 'unknown';
+                                if (!byRule[ruleId]) byRule[ruleId] = [];
+                                byRule[ruleId].push(rc);
+                            }
+                            for (const [ruleId, rcs] of Object.entries(byRule)) {
+                                db.upsertRuleComponents(rcs, ruleId, prop.id);
+                            }
+                        } catch (e) { console.error('[DB] library RC cache:', e.message); }
                         for (const rc of rcRes.data.data) await reactorCore.toFiles(rc, targetDir, fetchPkg);
 
                     } else {
@@ -679,6 +705,9 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
     try {
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
+        try { db.upsertProperty(property); }
+        catch (e) { console.error('[DB] upsertProperty:', e.message); }
+
         // 1. Save .reactor-settings.json (Config file for the project)
         fs.writeFileSync(path.join(targetDir, '.reactor-settings.json'), JSON.stringify({
             propertyId: property.id,
@@ -722,7 +751,7 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
                     const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
                     const compRes = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
                     try { db.upsertRuleComponents(compRes.data.data, rule.id, property.id); }
-                    catch (e) { /* non-fatal */ }
+                    catch (e) { console.error('[DB] sync upsertRuleComponents:', e.message); }
                     for (const rc of compRes.data.data) {
                         await reactorCore.toFiles(rc, targetDir, fetchPkg);
                     }
