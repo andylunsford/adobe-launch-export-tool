@@ -58,6 +58,7 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             'adobe-login', 'get-companies', 'get-properties',
             'get-environments', 'get-libraries', 'get-environment-library',
             'perform-environment-comparison',
+            'get-cache-stats', 'clear-cache',
         ];
         channels.forEach(ch => { try { ipcMain.removeHandler(ch); } catch (_) {} });
 
@@ -79,6 +80,12 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             rulesA: [], rulesB: [], dataElementsA: [], dataElementsB: [],
             extensionsA: [], extensionsB: [],
         }));
+        ipcMain.handle('get-cache-stats', () => ({
+            rules: 0, data_elements: 0, extensions: 0,
+            rule_components: 0, environments: 0, libraries: 0,
+            oldest_cached_at: null
+        }));
+        ipcMain.handle('clear-cache', () => ({ success: true }));
     }, { outcome: loginOutcome, data: MOCK_DATA });
 }
 
