@@ -4,6 +4,7 @@ const fs = require('fs');
 const axios = require('axios');
 const https = require('https');
 const reactorCore = require('./lib/reactor-core');
+const db = require('./lib/db');
 
 // [SME Fix] Agent for Corporate Proxies
 const proxyAgent = new https.Agent({ rejectUnauthorized: false });
@@ -22,7 +23,10 @@ function createWindow() {
     win.loadFile('index.html');
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+    db.initDb();
+    createWindow();
+});
 
 // --- HELPER FUNCTIONS ---
 
@@ -471,15 +475,25 @@ const extensionPackageCache = new Map();
 
 async function getExtensionPackage(id, headers) {
     if (extensionPackageCache.has(id)) return extensionPackageCache.get(id);
-    
+
+    // Try DB cache before hitting the API
+    try {
+        const cached = db.getExtensionPackage(id);
+        if (cached) {
+            extensionPackageCache.set(id, cached);
+            return cached;
+        }
+    } catch (e) { /* non-fatal */ }
+
     try {
         const response = await axios.get(`https://reactor.adobe.io/extension_packages/${id}`, { headers, httpsAgent: proxyAgent });
         const pkg = response.data.data;
         extensionPackageCache.set(id, pkg);
+        try { db.upsertExtensionPackage(pkg); } catch (e) { /* non-fatal */ }
         return pkg;
     } catch (e) {
         console.error(`Failed to fetch extension package ${id}:`, e.message);
-        return null; // Return null so toFiles can skip transformation gracefully
+        return null;
     }
 }
 
@@ -522,18 +536,24 @@ ipcMain.handle('perform-export', async (event, args) => {
 
                 sendStatus(`Fetching Rules for ${prop.name}...`);
                 const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                try { db.upsertRules(rulesRes.data.data, prop.id); }
+                catch (e) { console.error('[DB] upsertRules:', e.message); }
                 for (const rule of rulesRes.data.data) {
                     await reactorCore.toFiles(rule, targetDir, fetchPkg);
                 }
 
                 sendStatus(`Fetching Data Elements & Extensions for ${prop.name}...`);
-                
+
                 const deRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/data_elements?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                try { db.upsertDataElements(deRes.data.data, prop.id); }
+                catch (e) { console.error('[DB] upsertDataElements:', e.message); }
                 for (const de of deRes.data.data) {
                     await reactorCore.toFiles(de, targetDir, fetchPkg);
                 }
 
                 const extRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/extensions?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                try { db.upsertExtensions(extRes.data.data, prop.id); }
+                catch (e) { console.error('[DB] upsertExtensions:', e.message); }
                 for (const ext of extRes.data.data) {
                     await reactorCore.toFiles(ext, targetDir, fetchPkg);
                 }
@@ -551,6 +571,8 @@ ipcMain.handle('perform-export', async (event, args) => {
                         try {
                             const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
                             const compRes = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
+                            try { db.upsertRuleComponents(compRes.data.data, rule.id, prop.id); }
+                            catch (e) { console.error('[DB] upsertRuleComponents:', e.message); }
                             for (const rc of compRes.data.data) {
                                 await reactorCore.toFiles(rc, targetDir, fetchPkg);
                             }
@@ -589,14 +611,20 @@ ipcMain.handle('perform-export', async (event, args) => {
 
                         // Rules
                         const rulesRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rules`, { headers, httpsAgent: proxyAgent });
+                        try { db.upsertLibrary(libRes.data.data, prop.id); db.upsertRules(rulesRes.data.data, prop.id); db.linkLibraryRules(libraryId, rulesRes.data.data); }
+                        catch (e) { console.error('[DB] library rules cache:', e.message); }
                         for (const r of rulesRes.data.data) await reactorCore.toFiles(r, targetDir, fetchPkg);
 
                         // Data Elements
                         const deRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/data_elements`, { headers, httpsAgent: proxyAgent });
+                        try { db.upsertDataElements(deRes.data.data, prop.id); db.linkLibraryDataElements(libraryId, deRes.data.data); }
+                        catch (e) { console.error('[DB] library DE cache:', e.message); }
                         for (const d of deRes.data.data) await reactorCore.toFiles(d, targetDir, fetchPkg);
-                        
+
                         // Extensions
                         const extRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/extensions`, { headers, httpsAgent: proxyAgent });
+                        try { db.upsertExtensions(extRes.data.data, prop.id); db.linkLibraryExtensions(libraryId, extRes.data.data); }
+                        catch (e) { console.error('[DB] library ext cache:', e.message); }
                         for (const e of extRes.data.data) await reactorCore.toFiles(e, targetDir, fetchPkg);
 
                         // Rule Components
@@ -662,18 +690,24 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
         // 2. Fetch & Save Everything
         sendLog(`Fetching Rules...`);
         const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        try { db.upsertRules(rulesRes.data.data, property.id); }
+        catch (e) { console.error('[DB] sync upsertRules:', e.message); }
         for (const rule of rulesRes.data.data) {
             await reactorCore.toFiles(rule, targetDir, fetchPkg);
         }
 
         sendLog(`Fetching Data Elements...`);
         const deRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/data_elements?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        try { db.upsertDataElements(deRes.data.data, property.id); }
+        catch (e) { console.error('[DB] sync upsertDataElements:', e.message); }
         for (const de of deRes.data.data) {
             await reactorCore.toFiles(de, targetDir, fetchPkg);
         }
 
         sendLog(`Fetching Extensions...`);
         const extRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/extensions?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        try { db.upsertExtensions(extRes.data.data, property.id); }
+        catch (e) { console.error('[DB] sync upsertExtensions:', e.message); }
         for (const ext of extRes.data.data) {
             await reactorCore.toFiles(ext, targetDir, fetchPkg);
         }
@@ -687,6 +721,8 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
                 try {
                     const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
                     const compRes = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
+                    try { db.upsertRuleComponents(compRes.data.data, rule.id, property.id); }
+                    catch (e) { /* non-fatal */ }
                     for (const rc of compRes.data.data) {
                         await reactorCore.toFiles(rc, targetDir, fetchPkg);
                     }
