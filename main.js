@@ -326,8 +326,16 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                 const writeThrough = (data) => {
                     const libId = data.buildId?.startsWith('LB') ? data.buildId : null;
                     if (!libId) return;
+                    // propertyId is null here — comparison data is keyed by libraryId (junction tables),
+                    // not by property. Stats and scoped-clear won't see this data, which is acceptable.
                     db.upsertRules(data.rules, null);
                     db.linkLibraryRules(libId, data.rules);
+                    // Write rule components for each rule
+                    for (const rule of data.rules) {
+                        if (rule.rule_components && rule.rule_components.length > 0) {
+                            db.upsertRuleComponents(rule.rule_components, rule.id, null);
+                        }
+                    }
                     db.upsertDataElements(data.data_elements, null);
                     db.linkLibraryDataElements(libId, data.data_elements);
                     db.upsertExtensions(data.extensions, null);
