@@ -59,6 +59,7 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             'get-environments', 'get-libraries', 'get-environment-library',
             'perform-environment-comparison',
             'get-cache-stats', 'clear-cache',
+            'resume-archive-run',
         ];
         channels.forEach(ch => { try { ipcMain.removeHandler(ch); } catch (_) {} });
 
@@ -86,6 +87,7 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             oldest_cached_at: null
         }));
         ipcMain.handle('clear-cache', () => ({ success: true }));
+        ipcMain.handle('resume-archive-run', () => ({ success: true }));
     }, { outcome: loginOutcome, data: MOCK_DATA });
 }
 
