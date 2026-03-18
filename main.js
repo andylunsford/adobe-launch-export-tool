@@ -987,6 +987,81 @@ async function archiveFetchList(url, headers, sendUpdate) {
     return all;
 }
 
+/**
+ * Process a work queue from startIndex onwards, in chunks of ARCHIVE_CHUNK_SIZE.
+ * Returns { processedItems, totalItems } on success.
+ * Throws Error('RATE_LIMIT_EXHAUSTED') with .resumeIndex set to the failing chunk's start.
+ */
+async function runArchiveQueue({ workQueue, startIndex, processedItems, totalItems, propertyId, targetDir, headers, sendUpdate }) {
+    let processed = processedItems;
+
+    for (let i = startIndex; i < workQueue.length; i += ARCHIVE_CHUNK_SIZE) {
+        const chunk = workQueue.slice(i, i + ARCHIVE_CHUNK_SIZE);
+
+        // Collect any RATE_LIMIT_EXHAUSTED thrown inside the chunk's items
+        let rateLimitHit = null;
+        await Promise.all(chunk.map(async (job) => {
+            const { type, item } = job;
+            const itemId = item.id;
+            const safeName = sanitizeFolderName(item.attributes.name || item.attributes.display_name || 'unnamed');
+
+            const itemDir = path.join(targetDir, type, `${safeName}_${itemId}`);
+            if (!fs.existsSync(itemDir)) fs.mkdirSync(itemDir, { recursive: true });
+
+            try {
+                const noRevisionTypes = ['builds', 'libraries', 'environments', 'rule_components'];
+
+                if (noRevisionTypes.includes(type)) {
+                    fs.writeFileSync(path.join(itemDir, `${type}_${itemId}.json`), JSON.stringify(item, null, 2));
+                } else {
+                    const revisionsUrl = `https://reactor.adobe.io/${type}/${itemId}/revisions`;
+                    const revisions = await archiveFetchList(revisionsUrl, headers, sendUpdate);
+
+                    revisions.forEach(rev => {
+                        const revPath = path.join(itemDir, `rev_${rev.id}.json`);
+                        if (!fs.existsSync(revPath)) {
+                            fs.writeFileSync(revPath, JSON.stringify(rev, null, 2));
+                        }
+                    });
+
+                    if (type === 'extensions') {
+                        try {
+                            const pkgUrl = `https://reactor.adobe.io/extensions/${itemId}/extension_package`;
+                            const pkgRes = await rateLimitedGet(pkgUrl, headers, sendUpdate);
+                            const pkg = pkgRes.data.data;
+                            if (pkg) {
+                                fs.writeFileSync(path.join(itemDir, `package_${pkg.id}.json`), JSON.stringify(pkg, null, 2));
+                            }
+                        } catch (pkgErr) {
+                            if (pkgErr.message === 'RATE_LIMIT_EXHAUSTED') throw pkgErr;
+                            console.error(`Failed to fetch package for extension ${itemId}:`, pkgErr.message);
+                        }
+                    }
+                }
+            } catch (itemErr) {
+                if (itemErr.message === 'RATE_LIMIT_EXHAUSTED') {
+                    rateLimitHit = itemErr;  // bubble up after all items settle
+                } else {
+                    console.error(`Failed to archive ${type} ${itemId}:`, itemErr.message);
+                }
+            }
+        }));
+
+        if (rateLimitHit) {
+            const err = new Error('RATE_LIMIT_EXHAUSTED');
+            err.resumeIndex = i;
+            err.processedItems = processed;
+            throw err;
+        }
+
+        processed += chunk.length;
+        const pct = Math.round((processed / totalItems) * 100);
+        sendUpdate(`Archived ${processed}/${totalItems} items...`, pct);
+    }
+
+    return { processedItems: processed, totalItems };
+}
+
 ipcMain.handle('perform-archive-run', async (event, { propertyId, targetDir, types, token, creds }) => {
     const headers = getHeaders(token, creds);
 
