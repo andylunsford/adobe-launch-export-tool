@@ -187,7 +187,7 @@ ipcMain.handle('get-environment-library', async (event, { token, creds, environm
     }
 });
 
-ipcMain.handle('perform-environment-comparison', async (event, { token, creds, envAId, envBId, mode }) => {
+ipcMain.handle('perform-environment-comparison', async (event, { token, creds, envAId, envBId, mode, useCache }) => {
     try {
         const headers = getHeaders(token, creds);
 
@@ -261,33 +261,81 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
             }
         }
 
+        function fetchFromCache(entityId) {
+            try {
+                const libId = entityId.startsWith('LB') ? entityId
+                    : db.getLatestBuildForEnvironment(entityId)?.relationships?.library?.data?.id;
+                if (!libId || !db.hasCachedLibrary(libId)) return null;
+                return {
+                    rules: db.getRulesForLibrary(libId),
+                    data_elements: db.getDataElementsForLibrary(libId),
+                    extensions: db.getExtensionsForLibrary(libId),
+                    libraryId: libId
+                };
+            } catch (e) {
+                console.error('[DB] fetchFromCache:', e.message);
+                return null;
+            }
+        }
+
+        let fromCache = false;
         let envAData, envBData;
 
-        if (mode === 'history') {
-            // HISTORY MODE: Compare Build N (Latest) vs Build N-1 (Previous)
-            // envAId is the Environment ID
-            const buildRes = await axios.get(`https://reactor.adobe.io/environments/${envAId}/builds?page[size]=2`, { headers, httpsAgent: proxyAgent });
-            const builds = buildRes.data.data;
-
-            if (builds.length < 2) {
-                throw new Error("Not enough build history (need at least 2 builds) to compare.");
+        if (useCache && mode !== 'history') {
+            const cA = fetchFromCache(envAId);
+            const cB = fetchFromCache(envBId);
+            if (cA && cB) {
+                envAData = cA;
+                envBData = cB;
+                fromCache = true;
             }
+        }
 
-            // builds[0] is Latest (New/B), builds[1] is Previous (Old/A)
-            console.log(`Comparing Build ${builds[1].id} (Old) vs ${builds[0].id} (New)`);
-            
-            // Parallel fetch
-            [envAData, envBData] = await Promise.all([
-                fetchBuildContents(builds[1].id), // Old
-                fetchBuildContents(builds[0].id)  // New
-            ]);
+        if (!fromCache) {
+            if (mode === 'history') {
+                // HISTORY MODE: Compare Build N (Latest) vs Build N-1 (Previous)
+                // envAId is the Environment ID
+                const buildRes = await axios.get(`https://reactor.adobe.io/environments/${envAId}/builds?page[size]=2`, { headers, httpsAgent: proxyAgent });
+                const builds = buildRes.data.data;
 
-        } else {
-            // STANDARD COMPARISON
-            [envAData, envBData] = await Promise.all([
-                fetchEnvironmentData(envAId),
-                fetchEnvironmentData(envBId)
-            ]);
+                if (builds.length < 2) {
+                    throw new Error("Not enough build history (need at least 2 builds) to compare.");
+                }
+
+                // builds[0] is Latest (New/B), builds[1] is Previous (Old/A)
+                console.log(`Comparing Build ${builds[1].id} (Old) vs ${builds[0].id} (New)`);
+
+                // Parallel fetch
+                [envAData, envBData] = await Promise.all([
+                    fetchBuildContents(builds[1].id), // Old
+                    fetchBuildContents(builds[0].id)  // New
+                ]);
+
+            } else {
+                // STANDARD COMPARISON
+                [envAData, envBData] = await Promise.all([
+                    fetchEnvironmentData(envAId),
+                    fetchEnvironmentData(envBId)
+                ]);
+            }
+        }
+
+        // Write-through: cache the comparison data for next time
+        if (!fromCache && mode !== 'history') {
+            try {
+                const writeThrough = (data) => {
+                    const libId = data.buildId?.startsWith('LB') ? data.buildId : null;
+                    if (!libId) return;
+                    db.upsertRules(data.rules, null);
+                    db.linkLibraryRules(libId, data.rules);
+                    db.upsertDataElements(data.data_elements, null);
+                    db.linkLibraryDataElements(libId, data.data_elements);
+                    db.upsertExtensions(data.extensions, null);
+                    db.linkLibraryExtensions(libId, data.extensions);
+                };
+                writeThrough(envAData);
+                writeThrough(envBData);
+            } catch (e) { console.error('[DB] post-comparison cache write:', e.message); }
         }
 
         // Helper function to compare arrays of items
@@ -462,11 +510,23 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
             extensions: compareItems(envAData.extensions, envBData.extensions, 'extensions')
         };
 
-        return comparison;
+        return { ...comparison, fromCache };
     } catch (error) {
         console.error('Comparison error:', error);
         throw new Error(`Failed to compare environments: ${error.message}`);
     }
+});
+
+ipcMain.handle('get-cache-stats', (event, { propertyId }) => {
+    try { return db.getCacheStats(propertyId); }
+    catch (e) { console.error('[DB]', e.message); return null; }
+});
+
+ipcMain.handle('clear-cache', (event, { propertyId }) => {
+    try {
+        propertyId ? db.clearPropertyCache(propertyId) : db.clearAllCache();
+        return { success: true };
+    } catch (e) { return { success: false, error: e.message }; }
 });
 
 // --- EXPORT LOGIC ---
