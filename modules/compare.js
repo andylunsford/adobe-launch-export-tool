@@ -83,20 +83,25 @@ async function loadEnvironmentsForCompare() {
 async function refreshCacheStatus() {
     const propertyId = document.getElementById('compare-prop-select').value;
     if (!propertyId) return;
-    const stats = await ipcRenderer.invoke('get-cache-stats', { propertyId });
-    const badge = document.getElementById('cache-status-badge');
-    if (!stats || stats.rules === 0) {
-        badge.textContent = 'Cache: empty';
-        badge.style.color = 'var(--danger, #e74c3c)';
-    } else {
-        const age = stats.oldest_cached_at
-            ? Math.round((Date.now() / 1000 - stats.oldest_cached_at) / 60) + ' min ago'
-            : 'unknown';
-        badge.textContent = `Cache: ${stats.rules} rules, ${stats.data_elements} DEs — ${age}`;
-        badge.style.color = 'var(--success, #27ae60)';
+    try {
+        const stats = await ipcRenderer.invoke('get-cache-stats', { propertyId });
+        const badge = document.getElementById('cache-status-badge');
+        if (!stats || stats.rules === 0) {
+            badge.textContent = 'Cache: empty';
+            badge.style.color = 'var(--danger, #e74c3c)';
+        } else {
+            const age = stats.oldest_cached_at
+                ? Math.round((Date.now() / 1000 - stats.oldest_cached_at) / 60) + ' min ago'
+                : 'unknown';
+            badge.textContent = `Cache: ${stats.rules} rules, ${stats.data_elements} DEs — ${age}`;
+            badge.style.color = 'var(--success, #27ae60)';
+        }
+    } catch (e) {
+        const badge = document.getElementById('cache-status-badge');
+        badge.textContent = 'Cache: unavailable';
+        badge.style.color = 'var(--text-muted)';
     }
 }
-window.refreshCacheStatus = refreshCacheStatus;
 
 // --- Update Info Display on Selection Change ---
 function updateComparisonInfo(selectId, infoId) {
