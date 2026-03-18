@@ -1168,7 +1168,7 @@ ipcMain.handle('perform-archive-run', async (event, { propertyId, targetDir, typ
             });
         } catch (queueErr) {
             if (queueErr.message === 'RATE_LIMIT_EXHAUSTED') {
-                const pct = Math.round((queueErr.processedItems / totalItems) * 100);
+                const pct = totalItems ? Math.round((queueErr.processedItems / totalItems) * 100) : 0;
                 pendingArchive = {
                     workQueue,
                     resumeIndex: queueErr.resumeIndex,
