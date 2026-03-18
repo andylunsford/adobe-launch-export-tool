@@ -9,35 +9,32 @@ const ui = require('./ui-helpers');
 // --- Start Bulk Export Job ---
 async function startExportJob() {
     const checks = document.querySelectorAll('.prop-check:checked');
-    const propertyIds = Array.from(checks).map(cb => cb.value);
-    const propertyNames = Array.from(checks).map(cb => cb.dataset.name);
+    const properties = Array.from(checks).map(cb => ({ id: cb.value, name: cb.dataset.name }));
 
-    if (propertyIds.length === 0) {
+    if (properties.length === 0) {
         alert("Please select at least one property to export.");
         return;
     }
 
-    const exportMode = document.querySelector('input[name="export-mode"]:checked').value;
-    const notesPath = document.getElementById('notes-path-input').value;
+    const types = [];
+    if (document.getElementById('opt-full-export')?.checked) types.push('full');
+    if (document.getElementById('opt-library-export')?.checked) types.push('library');
+    if (types.length === 0) types.push('full');
 
-    ui.showLoading(`Exporting ${propertyIds.length} properties...`);
+    ui.showLoading(`Exporting ${properties.length} properties...`);
 
     try {
         const result = await ipcRenderer.invoke('perform-export', {
-            propertyIds,
-            propertyNames,
-            exportMode,
-            notesPath,
+            properties,
+            types,
             token: ui.getGlobalToken(),
             creds: ui.getCurrentCreds()
         });
-        
-        const { targetDir } = result;
 
         ui.hideLoading();
-        if (targetDir) {
-            alert(`✅ Export Complete! Files saved to:\n\n${targetDir}`);
-            shell.openPath(targetDir);
+        if (result && result.targetDir) {
+            alert(`✅ Export Complete! Files saved to:\n\n${result.targetDir}`);
+            shell.openPath(result.targetDir);
         } else {
             alert("❌ Export Failed: The export process returned an error.");
         }

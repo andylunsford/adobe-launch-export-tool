@@ -491,7 +491,7 @@ ipcMain.handle('perform-export', async (event, args) => {
         properties: ['openDirectory']
     });
 
-    if (canceled || filePaths.length === 0) return "Export Cancelled";
+    if (canceled || filePaths.length === 0) return { targetDir: null };
     const baseDir = filePaths[0];
 
     const headers = getHeaders(token, creds);
@@ -611,7 +611,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                 }
             }
         }
-        return `Export Complete! Files saved to: ${baseDir}`;
+        return { targetDir: baseDir };
     } catch (error) {
         console.error(error);
         throw new Error(`Failed: ${error.message} (URL: ${error.config ? error.config.url : 'Unknown'})`);
