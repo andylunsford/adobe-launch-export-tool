@@ -17,6 +17,12 @@
     "rebuild": "electron-rebuild -f -w better-sqlite3"
   },
   "type": "commonjs",
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/e2e/"
+    ]
+  },
   "build": {
     "nativeRebuilder": "sequential",
     "appId": "com.andylunsford.launch-export",

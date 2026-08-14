@@ -142,3 +142,8 @@ export/
 # Playwright
 test-results/
 playwright-report/
+.playwright-mcp/
+
+# Agent tooling (local, not part of the project)
+.claude/
+.superpowers/
