@@ -49,6 +49,14 @@ Listener identity does not survive `contextBridge`, so there is no `removeListen
 - Schema: `lib/db/schema.js` — tables: properties, rules, data_elements, rule_components, extensions, environments, libraries
 - Must call `initDb()` once in main process before any DB operations
 
+## TLS
+
+All Reactor/IMS calls share one `https.Agent` (`apiAgent` in `main.js`). Certificate verification is **on by default**. Users behind a TLS-inspecting corporate proxy can disable it via the "Allow untrusted certificates" checkbox in the credentials panel, which persists `allow_insecure_tls` into `reactor_vars.json`.
+
+- `refreshApiAgent()` rebuilds the agent at startup and whenever the setting changes, so a toggle applies without restarting.
+- `adobe-login` maps OpenSSL trust failures to a `tlsTrustError` response pointing at the checkbox, rather than surfacing a bare error code.
+- Never reintroduce a hardcoded `rejectUnauthorized: false` — it silently accepts any certificate on every machine, including ones not behind a proxy.
+
 ## Gotchas
 
 - **Native module rebuild**: `better-sqlite3` must be built against the Electron ABI, not the system Node ABI. `postinstall` runs `electron-builder install-app-deps` automatically on `npm install`, so this is usually handled. If the app crashes on launch with a module-version error, run `npm run rebuild`.

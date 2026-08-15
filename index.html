@@ -51,6 +51,13 @@
         <input type="text" id="clientId" placeholder="Client ID">
         <input type="password" id="clientSecret" placeholder="Client Secret">
         <input type="text" id="orgId" placeholder="Org ID">
+        <label class="tls-opt-out" title="Only enable this if your corporate network inspects HTTPS traffic and login fails with a certificate error.">
+            <input type="checkbox" id="chk-allow-insecure-tls" onchange="setAllowInsecureTls(this.checked)">
+            <span>Allow untrusted certificates (corporate proxy)</span>
+        </label>
+        <p id="tls-warning" class="tls-warning hidden">
+            ⚠️ Certificate verification is off. Traffic to Adobe can be read or altered by anything on the network path.
+        </p>
         <button class="primary" onclick="loginAndSave()">Update & Connect</button>
         <p id="login-status" style="margin-top: 10px; font-size: 13px;"></p>
     </div>

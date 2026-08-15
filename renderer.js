@@ -22,6 +22,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 2. Load Saved Config
     try {
         const savedConfig = await window.api.getSavedConfig();
+
+        // Reflect the TLS opt-out before anything else, so the warning is
+        // visible even when there are no saved credentials yet.
+        auth.reflectTlsSetting(savedConfig.allow_insecure_tls === true);
+
         const creds = savedConfig.credentials;
 
         // 3. Auto-Login if Creds exist

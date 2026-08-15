@@ -497,3 +497,30 @@ button.primary:disabled {
 .footer a:hover {
     text-decoration: underline;
 }
+
+/* --- TLS opt-out (credentials panel) --- */
+.tls-opt-out {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0 4px;
+    font-size: 13px;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.tls-opt-out input {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}
+
+.tls-warning {
+    margin: 0 0 10px;
+    padding: 8px 10px;
+    border-left: 3px solid var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    color: var(--text-main);
+    font-size: 12px;
+    line-height: 1.4;
+}

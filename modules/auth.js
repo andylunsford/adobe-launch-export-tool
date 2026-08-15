@@ -128,14 +128,36 @@ async function loadProperties(companyId) {
     }
 }
 
+// --- TLS Opt-Out ---
+// Disabling certificate verification is a real downgrade, so the checkbox state
+// is mirrored by a visible warning rather than left as a quiet setting.
+async function setAllowInsecureTls(enabled) {
+    try {
+        await window.api.saveConfigField({ key: 'allow_insecure_tls', value: !!enabled });
+        reflectTlsSetting(enabled);
+    } catch (e) {
+        alert('Could not save the certificate setting: ' + e.message);
+    }
+}
+
+function reflectTlsSetting(enabled) {
+    const box = document.getElementById('chk-allow-insecure-tls');
+    if (box) box.checked = !!enabled;
+    const warning = document.getElementById('tls-warning');
+    if (warning) warning.classList.toggle('hidden', !enabled);
+}
+
 // --- Export to window ---
 window.loginAndSave = loginAndSave;
 window.saveCompanySelection = saveCompanySelection;
+window.setAllowInsecureTls = setAllowInsecureTls;
 
 // --- Module Exports ---
 export {
     loginAndSave,
     loadCompanies,
     saveCompanySelection,
-    loadProperties
+    loadProperties,
+    setAllowInsecureTls,
+    reflectTlsSetting
 };

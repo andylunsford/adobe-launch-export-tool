@@ -6,8 +6,44 @@ const https = require('https');
 const reactorCore = require('./lib/reactor-core');
 const db = require('./lib/db');
 
-// [SME Fix] Agent for Corporate Proxies
-const proxyAgent = new https.Agent({ rejectUnauthorized: false });
+// --- TLS ---
+// Corporate proxies that inspect TLS re-sign traffic with an internal CA that
+// Node does not trust, which is why this agent originally disabled verification
+// outright. That silently accepted any certificate on every machine, so
+// verification is now ON by default and the bypass is an explicit per-machine
+// opt-in persisted alongside the rest of the config.
+let apiAgent = new https.Agent();
+
+// Node/OpenSSL codes that mean "the chain did not validate" rather than a
+// network failure. Used to tell the user a proxy is likely the cause.
+const TLS_TRUST_ERROR_CODES = new Set([
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'UNABLE_TO_GET_ISSUER_CERT',
+    'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+    'SELF_SIGNED_CERT_IN_CHAIN',
+    'DEPTH_ZERO_SELF_SIGNED_CERT',
+    'CERT_UNTRUSTED',
+    'CERT_HAS_EXPIRED',
+    'ERR_TLS_CERT_ALTNAME_INVALID'
+]);
+
+function isTlsTrustError(err) {
+    return TLS_TRUST_ERROR_CODES.has(err?.code) ||
+           TLS_TRUST_ERROR_CODES.has(err?.cause?.code);
+}
+
+/**
+ * Rebuilds the shared agent from the persisted setting. Called at startup and
+ * whenever the setting changes, so a toggle takes effect without a restart.
+ */
+function refreshApiAgent() {
+    const insecure = loadVariables().allow_insecure_tls === true;
+    apiAgent = new https.Agent({ rejectUnauthorized: !insecure });
+    if (insecure) {
+        console.warn('[tls] Certificate verification is DISABLED by user setting.');
+    }
+    return insecure;
+}
 
 const VARS_PATH = path.join(app.getPath('userData'), 'reactor_vars.json');
 
@@ -31,6 +67,8 @@ function createWindow() {
 app.whenReady().then(() => {
     try { db.initDb(); }
     catch (e) { console.error('[DB] initDb failed (cache disabled):', e.message); }
+    // Must run after app is ready - reads the persisted config from userData.
+    refreshApiAgent();
     createWindow();
 });
 
@@ -120,6 +158,8 @@ ipcMain.handle('save-config-field', (event, { key, value }) => {
     const vars = loadVariables();
     vars[key] = value;
     saveVariables(vars);
+    // Rebuild the agent so a TLS toggle applies without restarting the app.
+    if (key === 'allow_insecure_tls') refreshApiAgent();
     return true;
 });
 
@@ -133,7 +173,7 @@ ipcMain.handle('adobe-login', async (event, creds) => {
                 client_secret: creds.client_secret,
                 scope: creds.scope
             },
-            httpsAgent: proxyAgent
+            httpsAgent: apiAgent
         });
 
         const vars = loadVariables();
@@ -142,6 +182,19 @@ ipcMain.handle('adobe-login', async (event, creds) => {
 
         return { success: true, token: response.data.access_token };
     } catch (error) {
+        // A trust failure here almost always means a TLS-inspecting corporate
+        // proxy rather than bad credentials. Say so, instead of surfacing an
+        // opaque OpenSSL code the user cannot act on.
+        if (isTlsTrustError(error)) {
+            return {
+                success: false,
+                tlsTrustError: true,
+                error: 'Could not verify the server certificate. If you are on a ' +
+                       'corporate network that inspects HTTPS traffic, enable ' +
+                       '"Allow untrusted certificates" in the credentials panel ' +
+                       `and try again. (${error.code ?? error.cause?.code})`
+            };
+        }
         return { success: false, error: error.message };
     }
 });
@@ -150,7 +203,7 @@ ipcMain.handle('get-companies', async (event, { token, creds }) => {
     const headers = getHeaders(token, creds);
     const response = await axios.get("https://reactor.adobe.io/companies", {
         headers,
-        httpsAgent: proxyAgent
+        httpsAgent: apiAgent
     });
     return response.data.data;
 });
@@ -159,7 +212,7 @@ ipcMain.handle('get-properties', async (event, { token, creds, companyId }) => {
     const headers = getHeaders(token, creds);
     const response = await axios.get(`https://reactor.adobe.io/companies/${companyId}/properties?page[size]=500`, {
         headers,
-        httpsAgent: proxyAgent
+        httpsAgent: apiAgent
     });
     return response.data.data;
 });
@@ -168,7 +221,7 @@ ipcMain.handle('get-libraries', async (event, { token, creds, propertyId }) => {
     const headers = getHeaders(token, creds);
     const response = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/libraries?page[size]=100`, {
         headers,
-        httpsAgent: proxyAgent
+        httpsAgent: apiAgent
     });
     return response.data.data;
 });
@@ -177,7 +230,7 @@ ipcMain.handle('get-environments', async (event, { token, creds, propertyId }) =
     const headers = getHeaders(token, creds);
     const response = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/environments`, {
         headers,
-        httpsAgent: proxyAgent
+        httpsAgent: apiAgent
     });
     return response.data.data;
 });
@@ -189,7 +242,7 @@ ipcMain.handle('get-environment-library', async (event, { token, creds, environm
         // Get the latest build for this environment
         const buildRes = await axios.get(`https://reactor.adobe.io/environments/${environmentId}/builds?page[size]=1`, {
             headers,
-            httpsAgent: proxyAgent
+            httpsAgent: apiAgent
         });
 
         if (buildRes.data.data && buildRes.data.data.length > 0) {
@@ -199,7 +252,7 @@ ipcMain.handle('get-environment-library', async (event, { token, creds, environm
             // Get the library details
             const libRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}`, {
                 headers,
-                httpsAgent: proxyAgent
+                httpsAgent: apiAgent
             });
 
             return {
@@ -226,7 +279,7 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
             let currentUrl = url;
 
             while (currentUrl) {
-                const response = await axios.get(currentUrl, { headers, httpsAgent: proxyAgent });
+                const response = await axios.get(currentUrl, { headers, httpsAgent: apiAgent });
                 allData = allData.concat(response.data.data || []);
 
                 // Check if there's a next page
@@ -275,7 +328,7 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                 const rulesWithComponents = await Promise.all(rules.map(async (rule) => {
                     try {
                         const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
-                        const res = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
+                        const res = await axios.get(compUrl, { headers, httpsAgent: apiAgent });
                         return { ...rule, rule_components: res.data.data };
                     } catch (e) { return rule; }
                 }));
@@ -283,7 +336,7 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
                 return { rules: rulesWithComponents, data_elements, extensions, buildId: entityId };
             } else {
                 // It's an Environment -> Get latest build
-                const buildRes = await axios.get(`https://reactor.adobe.io/environments/${entityId}/builds?page[size]=1`, { headers, httpsAgent: proxyAgent });
+                const buildRes = await axios.get(`https://reactor.adobe.io/environments/${entityId}/builds?page[size]=1`, { headers, httpsAgent: apiAgent });
                 if (!buildRes.data.data || buildRes.data.data.length === 0) return { rules: [], data_elements: [], extensions: [], buildId: null };
                 
                 return await fetchBuildContents(buildRes.data.data[0].id);
@@ -324,7 +377,7 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
             if (mode === 'history') {
                 // HISTORY MODE: Compare Build N (Latest) vs Build N-1 (Previous)
                 // envAId is the Environment ID
-                const buildRes = await axios.get(`https://reactor.adobe.io/environments/${envAId}/builds?page[size]=2`, { headers, httpsAgent: proxyAgent });
+                const buildRes = await axios.get(`https://reactor.adobe.io/environments/${envAId}/builds?page[size]=2`, { headers, httpsAgent: apiAgent });
                 const builds = buildRes.data.data;
 
                 if (builds.length < 2) {
@@ -584,7 +637,7 @@ async function getExtensionPackage(id, headers) {
     } catch (e) { /* non-fatal */ }
 
     try {
-        const response = await axios.get(`https://reactor.adobe.io/extension_packages/${id}`, { headers, httpsAgent: proxyAgent });
+        const response = await axios.get(`https://reactor.adobe.io/extension_packages/${id}`, { headers, httpsAgent: apiAgent });
         const pkg = response.data.data;
         extensionPackageCache.set(id, pkg);
         try { db.upsertExtensionPackage(pkg); } catch (e) { /* non-fatal */ }
@@ -636,7 +689,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                 catch (e) { console.error('[DB] upsertProperty:', e.message); }
 
                 sendStatus(`Fetching Rules for ${prop.name}...`);
-                const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/rules?page[size]=1000`, { headers, httpsAgent: apiAgent });
                 try { db.upsertRules(rulesRes.data.data, prop.id); }
                 catch (e) { console.error('[DB] upsertRules:', e.message); }
                 for (const rule of rulesRes.data.data) {
@@ -645,14 +698,14 @@ ipcMain.handle('perform-export', async (event, args) => {
 
                 sendStatus(`Fetching Data Elements & Extensions for ${prop.name}...`);
 
-                const deRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/data_elements?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                const deRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/data_elements?page[size]=1000`, { headers, httpsAgent: apiAgent });
                 try { db.upsertDataElements(deRes.data.data, prop.id); }
                 catch (e) { console.error('[DB] upsertDataElements:', e.message); }
                 for (const de of deRes.data.data) {
                     await reactorCore.toFiles(de, targetDir, fetchPkg);
                 }
 
-                const extRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/extensions?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+                const extRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/extensions?page[size]=1000`, { headers, httpsAgent: apiAgent });
                 try { db.upsertExtensions(extRes.data.data, prop.id); }
                 catch (e) { console.error('[DB] upsertExtensions:', e.message); }
                 for (const ext of extRes.data.data) {
@@ -671,7 +724,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                     await Promise.all(chunk.map(async (rule) => {
                         try {
                             const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
-                            const compRes = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
+                            const compRes = await axios.get(compUrl, { headers, httpsAgent: apiAgent });
                             try { db.upsertRuleComponents(compRes.data.data, rule.id, prop.id); }
                             catch (e) { console.error('[DB] upsertRuleComponents:', e.message); }
                             for (const rc of compRes.data.data) {
@@ -691,11 +744,11 @@ ipcMain.handle('perform-export', async (event, args) => {
 
                 sendStatus(`Locating Production Library for ${prop.name}...`);
 
-                const envRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/environments`, { headers, httpsAgent: proxyAgent });
+                const envRes = await axios.get(`https://reactor.adobe.io/properties/${prop.id}/environments`, { headers, httpsAgent: apiAgent });
                 const prodEnv = envRes.data.data.find(e => e.attributes.stage === 'production');
 
                 if (prodEnv) {
-                    const buildRes = await axios.get(`https://reactor.adobe.io/environments/${prodEnv.id}/builds?page[size]=50`, { headers, httpsAgent: proxyAgent });
+                    const buildRes = await axios.get(`https://reactor.adobe.io/environments/${prodEnv.id}/builds?page[size]=50`, { headers, httpsAgent: apiAgent });
                     const builds = buildRes.data.data;
 
                     if (builds && builds.length > 0) {
@@ -704,7 +757,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                         const libraryId = latestBuild.relationships.library.data.id;
 
                         // Get Library Name
-                        const libRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}`, { headers, httpsAgent: proxyAgent });
+                        const libRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}`, { headers, httpsAgent: apiAgent });
                         const libraryName = libRes.data.data.attributes.name;
                         const libSafeName = sanitizeFolderName(libraryName);
 
@@ -714,7 +767,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                         sendStatus(`Downloading Library "${libraryName}"...`);
 
                         // Rules
-                        const rulesRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rules`, { headers, httpsAgent: proxyAgent });
+                        const rulesRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rules`, { headers, httpsAgent: apiAgent });
                         try { db.upsertLibrary(libRes.data.data, prop.id); }
                         catch (e) { console.error('[DB] library upsertLibrary:', e.message); }
                         try { db.upsertRules(rulesRes.data.data, prop.id); }
@@ -724,7 +777,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                         for (const r of rulesRes.data.data) await reactorCore.toFiles(r, targetDir, fetchPkg);
 
                         // Data Elements
-                        const deRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/data_elements`, { headers, httpsAgent: proxyAgent });
+                        const deRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/data_elements`, { headers, httpsAgent: apiAgent });
                         try { db.upsertDataElements(deRes.data.data, prop.id); }
                         catch (e) { console.error('[DB] library upsertDataElements:', e.message); }
                         try { db.linkLibraryDataElements(libraryId, deRes.data.data); }
@@ -732,7 +785,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                         for (const d of deRes.data.data) await reactorCore.toFiles(d, targetDir, fetchPkg);
 
                         // Extensions
-                        const extRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/extensions`, { headers, httpsAgent: proxyAgent });
+                        const extRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/extensions`, { headers, httpsAgent: apiAgent });
                         try { db.upsertExtensions(extRes.data.data, prop.id); }
                         catch (e) { console.error('[DB] library upsertExtensions:', e.message); }
                         try { db.linkLibraryExtensions(libraryId, extRes.data.data); }
@@ -740,7 +793,7 @@ ipcMain.handle('perform-export', async (event, args) => {
                         for (const e of extRes.data.data) await reactorCore.toFiles(e, targetDir, fetchPkg);
 
                         // Rule Components
-                        const rcRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rule_components`, { headers, httpsAgent: proxyAgent });
+                        const rcRes = await axios.get(`https://reactor.adobe.io/libraries/${libraryId}/rule_components`, { headers, httpsAgent: apiAgent });
                         try {
                             const byRule = {};
                             for (const rc of rcRes.data.data) {
@@ -815,7 +868,7 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
 
         // 2. Fetch & Save Everything
         sendLog(`Fetching Rules...`);
-        const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        const rulesRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/rules?page[size]=1000`, { headers, httpsAgent: apiAgent });
         try { db.upsertRules(rulesRes.data.data, property.id); }
         catch (e) { console.error('[DB] sync upsertRules:', e.message); }
         for (const rule of rulesRes.data.data) {
@@ -823,7 +876,7 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
         }
 
         sendLog(`Fetching Data Elements...`);
-        const deRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/data_elements?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        const deRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/data_elements?page[size]=1000`, { headers, httpsAgent: apiAgent });
         try { db.upsertDataElements(deRes.data.data, property.id); }
         catch (e) { console.error('[DB] sync upsertDataElements:', e.message); }
         for (const de of deRes.data.data) {
@@ -831,7 +884,7 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
         }
 
         sendLog(`Fetching Extensions...`);
-        const extRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/extensions?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+        const extRes = await axios.get(`https://reactor.adobe.io/properties/${property.id}/extensions?page[size]=1000`, { headers, httpsAgent: apiAgent });
         try { db.upsertExtensions(extRes.data.data, property.id); }
         catch (e) { console.error('[DB] sync upsertExtensions:', e.message); }
         for (const ext of extRes.data.data) {
@@ -846,7 +899,7 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
             await Promise.all(chunk.map(async (rule) => {
                 try {
                     const compUrl = `https://reactor.adobe.io/rules/${rule.id}/rule_components?page[size]=100`;
-                    const compRes = await axios.get(compUrl, { headers, httpsAgent: proxyAgent });
+                    const compRes = await axios.get(compUrl, { headers, httpsAgent: apiAgent });
                     try { db.upsertRuleComponents(compRes.data.data, rule.id, property.id); }
                     catch (e) { console.error('[DB] sync upsertRuleComponents:', e.message); }
                     for (const rc of compRes.data.data) {
@@ -880,15 +933,15 @@ ipcMain.handle('perform-sync-diff', async (event, args) => {
     // Define API Fetchers for the Diff Runner
     const api = {
         getRules: async () => {
-            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/rules?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/rules?page[size]=1000`, { headers, httpsAgent: apiAgent });
             return res.data.data;
         },
         getDataElements: async () => {
-            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/data_elements?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/data_elements?page[size]=1000`, { headers, httpsAgent: apiAgent });
             return res.data.data;
         },
         getExtensions: async () => {
-            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/extensions?page[size]=1000`, { headers, httpsAgent: proxyAgent });
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/extensions?page[size]=1000`, { headers, httpsAgent: apiAgent });
             return res.data.data;
         }
     };
@@ -911,17 +964,17 @@ ipcMain.handle('perform-archive-scan', async (event, { propertyId, types, token,
 
     try {
         if (types.includes('rules')) {
-            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/rules?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/rules?page[size]=1`, { headers, httpsAgent: apiAgent });
             counts.rules = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
             counts.total += counts.rules;
         }
         if (types.includes('data_elements')) {
-            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/data_elements?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/data_elements?page[size]=1`, { headers, httpsAgent: apiAgent });
             counts.data_elements = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
             counts.total += counts.data_elements;
         }
         if (types.includes('extensions')) {
-            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/extensions?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/extensions?page[size]=1`, { headers, httpsAgent: apiAgent });
             counts.extensions = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
             counts.total += counts.extensions;
         }
@@ -931,13 +984,13 @@ ipcMain.handle('perform-archive-scan', async (event, { propertyId, types, token,
         }
         // [NEW] Environments
         if (types.includes('environments')) {
-            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/environments?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/environments?page[size]=1`, { headers, httpsAgent: apiAgent });
             counts.environments = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
             counts.total += counts.environments;
         }
         // [NEW] Libraries
         if (types.includes('libraries')) {
-            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/libraries?page[size]=1`, { headers, httpsAgent: proxyAgent });
+            const res = await axios.get(`https://reactor.adobe.io/properties/${propertyId}/libraries?page[size]=1`, { headers, httpsAgent: apiAgent });
             counts.libraries = res.data.meta?.pagination?.total_count || res.data.meta?.pagination?.total || 0;
             counts.total += counts.libraries;
         }
@@ -977,7 +1030,7 @@ let pendingArchive = null;
  */
 async function rateLimitedGet(url, headers, sendUpdate) {
     async function attempt() {
-        return axios.get(url, { headers, httpsAgent: proxyAgent });
+        return axios.get(url, { headers, httpsAgent: apiAgent });
     }
 
     let res;
