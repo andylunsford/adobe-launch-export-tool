@@ -1,12 +1,12 @@
-const { ipcRenderer, shell } = require('electron');
-
 // --- Import Modules ---
-const ui = require('./modules/ui-helpers');
-const auth = require('./modules/auth');
-const exp = require('./modules/export');
-const sync = require('./modules/sync');
-const archive = require('./modules/archive');
-const compare = require('./modules/compare');
+// Imported for their side effects too: each module binds its handlers onto
+// `window` for the inline onclick attributes in index.html.
+import * as ui from './modules/ui-helpers.js';
+import * as auth from './modules/auth.js';
+import * as exp from './modules/export.js';
+import * as sync from './modules/sync.js';
+import * as archive from './modules/archive.js';
+import * as compare from './modules/compare.js';
 
 console.log("Renderer.js starting...");
 
@@ -17,11 +17,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 1. Footer Link
     const link = document.getElementById('credit-link');
-    if (link) link.addEventListener('click', (e) => { e.preventDefault(); shell.openExternal(link.href); });
+    if (link) link.addEventListener('click', (e) => { e.preventDefault(); window.api.openExternal(link.href); });
 
     // 2. Load Saved Config
     try {
-        const savedConfig = await ipcRenderer.invoke('get-saved-config');
+        const savedConfig = await window.api.getSavedConfig();
         const creds = savedConfig.credentials;
 
         // 3. Auto-Login if Creds exist
@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             ui.setCurrentCreds(creds);
 
             // Attempt Silent Login
-            const result = await ipcRenderer.invoke('adobe-login', creds);
+            const result = await window.api.adobeLogin(creds);
 
             if (result.success) {
                 ui.setGlobalToken(result.token);

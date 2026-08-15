@@ -3,8 +3,7 @@
  * Handles login, company selection, and property loading
  */
 
-const { ipcRenderer, shell } = require('electron');
-const ui = require('./ui-helpers');
+import * as ui from './ui-helpers.js';
 
 // --- Login ---
 async function loginAndSave(silent = false) {
@@ -21,7 +20,7 @@ async function loginAndSave(silent = false) {
 
         ui.setCurrentCreds(creds);
 
-        const result = await ipcRenderer.invoke('adobe-login', creds);
+        const result = await window.api.adobeLogin(creds);
 
         if (result.success) {
             ui.setGlobalToken(result.token);
@@ -51,9 +50,9 @@ async function loginAndSave(silent = false) {
 // --- Load Companies ---
 async function loadCompanies() {
     try {
-        const companies = await ipcRenderer.invoke('get-companies', { 
-            token: ui.getGlobalToken(), 
-            creds: ui.getCurrentCreds() 
+        const companies = await window.api.getCompanies({
+            token: ui.getGlobalToken(),
+            creds: ui.getCurrentCreds()
         });
 
         const select = document.getElementById('company-select');
@@ -83,7 +82,7 @@ async function saveCompanySelection() {
     }
 
     try {
-        await ipcRenderer.invoke('save-config-field', { key: 'company_id', value: companyId });
+        await window.api.saveConfigField({ key: 'company_id', value: companyId });
         await loadProperties(companyId);
         ui.togglePanel('company-panel');
         document.getElementById('main-interface').classList.remove('hidden');
@@ -97,10 +96,10 @@ async function loadProperties(companyId) {
     ui.showLoading("Fetching Properties...");
 
     try {
-        const properties = await ipcRenderer.invoke('get-properties', { 
-            token: ui.getGlobalToken(), 
-            creds: ui.getCurrentCreds(), 
-            companyId 
+        const properties = await window.api.getProperties({
+            token: ui.getGlobalToken(),
+            creds: ui.getCurrentCreds(),
+            companyId
         });
 
         if (!Array.isArray(properties)) {
@@ -134,7 +133,7 @@ window.loginAndSave = loginAndSave;
 window.saveCompanySelection = saveCompanySelection;
 
 // --- Module Exports ---
-module.exports = {
+export {
     loginAndSave,
     loadCompanies,
     saveCompanySelection,

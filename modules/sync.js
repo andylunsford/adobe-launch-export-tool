@@ -3,13 +3,12 @@
  * Handles local download, status check (diff), and push to Launch.
  */
 
-const { ipcRenderer, shell } = require('electron');
-const ui = require('./ui-helpers');
+import * as ui from './ui-helpers.js';
 
 // --- Folder Selection ---
 async function selectSyncFolder() {
     try {
-        const path = await ipcRenderer.invoke('select-folder');
+        const path = await window.api.selectFolder();
         if (path) document.getElementById('sync-folder-path').value = path;
     } catch (e) {
         console.error("selectSyncFolder error:", e);
@@ -29,14 +28,13 @@ async function initSyncDownload() {
     ui.logSync(`Starting Initialization for ${properties.length} properties...`);
 
     // Listener for logs
-    const logListener = (e, msg) => ui.logSync(msg);
-    ipcRenderer.on('sync-log', logListener);
+    const offSyncLog = window.api.onSyncLog((msg) => ui.logSync(msg));
 
     try {
         for (const property of properties) {
             ui.logSync(`[${property.name}] Starting download...`);
 
-            const result = await ipcRenderer.invoke('perform-sync-download', {
+            const result = await window.api.performSyncDownload({
                 property: { id: property.id, name: property.name },
                 targetDir: `${folder}/${property.name}`, // APPEND PROPERTY NAME
                 token: ui.getGlobalToken(),
@@ -48,7 +46,7 @@ async function initSyncDownload() {
     } catch (e) {
         ui.logSync(`❌ Error: ${e.message}`);
     } finally {
-        ipcRenderer.removeListener('sync-log', logListener);
+        offSyncLog();
     }
 }
 
@@ -67,7 +65,7 @@ async function checkSyncStatus() {
         ui.logSync(`\n--- [${property.name}] Starting Diff Check ---`);
 
         try {
-            const result = await ipcRenderer.invoke('perform-sync-diff', {
+            const result = await window.api.performSyncDiff({
                 property: { id: property.id, name: property.name }, // Pass property context
                 targetDir: `${folder}/${property.name}`, // APPEND PROPERTY NAME
                 token: ui.getGlobalToken(),
@@ -112,7 +110,7 @@ async function pushToLaunch() {
         ui.logSync(`\n--- [${property.name}] Starting Push ---`);
 
         try {
-            const result = await ipcRenderer.invoke('perform-sync-push', {
+            const result = await window.api.performSyncPush({
                 property: { id: property.id, name: property.name }, // Pass property context
                 targetDir: `${folder}/${property.name}`, // APPEND PROPERTY NAME
                 token: ui.getGlobalToken(),
@@ -131,7 +129,7 @@ window.initSyncDownload = initSyncDownload;
 window.checkSyncStatus = checkSyncStatus;
 window.pushToLaunch = pushToLaunch;
 
-module.exports = {
+export {
     selectSyncFolder,
     initSyncDownload,
     checkSyncStatus,

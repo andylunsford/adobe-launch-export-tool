@@ -3,8 +3,6 @@
  * Common UI utility functions used across the application
  */
 
-const { ipcRenderer, shell } = require('electron');
-
 // --- UI State ---
 let globalToken = null;
 let currentCreds = {};
@@ -109,7 +107,7 @@ window.toggleSelectAll = toggleSelectAll;
 window.toggleTheme = toggleTheme;
 
 // --- Module Exports ---
-module.exports = {
+export {
     getGlobalToken,
     setGlobalToken,
     getCurrentCreds,

@@ -3,13 +3,12 @@
  * Handles scanning properties and running full historical exports/archiving.
  */
 
-const { ipcRenderer } = require('electron');
-const ui = require('./ui-helpers');
+import * as ui from './ui-helpers.js';
 
 // --- Folder Selection ---
 async function selectArchiveFolder() {
     try {
-        const path = await ipcRenderer.invoke('select-folder');
+        const path = await window.api.selectFolder();
         if (path) {
             document.getElementById('archive-folder-path').value = path;
         }
@@ -46,7 +45,7 @@ async function scanForArchive() {
         for (const property of properties) {
             ui.logArchive(`\n--- [${property.name}] Starting Scan ---`);
 
-            const counts = await ipcRenderer.invoke('perform-archive-scan', {
+            const counts = await window.api.performArchiveScan({
                 propertyId: property.id,
                 types,
                 token: ui.getGlobalToken(),
@@ -93,14 +92,13 @@ async function startArchive() {
     document.getElementById('btn-start-archive').disabled = true;
 
     // Listener for progress — shows Resume button on rateLimited events
-    const logListener = (e, { msg, progress, rateLimited }) => {
+    const offProgress = window.api.onArchiveProgress(({ msg, progress, rateLimited }) => {
         ui.logArchive(msg, progress);
         if (rateLimited) {
             document.getElementById('btn-resume-archive').style.display = '';
             document.getElementById('btn-start-archive').disabled = true;
         }
-    };
-    ipcRenderer.on('archive-progress', logListener);
+    });
 
     try {
         for (const property of properties) {
@@ -113,7 +111,7 @@ async function startArchive() {
 
             ui.logArchive(`\n--- [${property.name}] Starting Archive Run ---`);
 
-            const result = await ipcRenderer.invoke('perform-archive-run', {
+            const result = await window.api.performArchiveRun({
                 propertyId: property.id,
                 targetDir: `${folder}/${property.name}`,
                 types: scanData.types,
@@ -137,7 +135,7 @@ async function startArchive() {
         ui.logArchive('❌ Archive Failed: ' + e.message);
         document.getElementById('btn-start-archive').disabled = false;
     } finally {
-        ipcRenderer.removeListener('archive-progress', logListener);
+        offProgress();
     }
 }
 
@@ -145,16 +143,15 @@ async function startArchive() {
 async function resumeArchive() {
     document.getElementById('btn-resume-archive').disabled = true;
 
-    const logListener = (e, { msg, progress, rateLimited }) => {
+    const offProgress = window.api.onArchiveProgress(({ msg, progress, rateLimited }) => {
         ui.logArchive(msg, progress);
         if (rateLimited) {
             document.getElementById('btn-resume-archive').disabled = false;
         }
-    };
-    ipcRenderer.on('archive-progress', logListener);
+    });
 
     try {
-        const result = await ipcRenderer.invoke('resume-archive-run');
+        const result = await window.api.resumeArchiveRun();
 
         if (result?.success) {
             ui.logArchive('✅ Archive resumed and completed', 100);
@@ -173,7 +170,7 @@ async function resumeArchive() {
         document.getElementById('btn-resume-archive').style.display = 'none';
         document.getElementById('btn-start-archive').disabled = false;
     } finally {
-        ipcRenderer.removeListener('archive-progress', logListener);
+        offProgress();
     }
 }
 
@@ -183,7 +180,7 @@ window.scanForArchive = scanForArchive;
 window.startArchive = startArchive;
 window.resumeArchive = resumeArchive;
 
-module.exports = {
+export {
     selectArchiveFolder,
     scanForArchive,
     startArchive,

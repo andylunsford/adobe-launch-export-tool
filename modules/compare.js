@@ -3,8 +3,7 @@
  * Handles loading environments/libraries and running environment comparisons.
  */
 
-const { ipcRenderer } = require('electron');
-const ui = require('./ui-helpers');
+import * as ui from './ui-helpers.js';
 
 let currentComparison = null;
 let entityAName = '';
@@ -39,15 +38,15 @@ async function loadEnvironmentsForCompare() {
 
     try {
         const [environments, libraries] = await Promise.all([
-            ipcRenderer.invoke('get-environments', { 
-                token: ui.getGlobalToken(), 
-                creds: ui.getCurrentCreds(), 
-                propertyId 
+            window.api.getEnvironments({
+                token: ui.getGlobalToken(),
+                creds: ui.getCurrentCreds(),
+                propertyId
             }),
-            ipcRenderer.invoke('get-libraries', { 
-                token: ui.getGlobalToken(), 
-                creds: ui.getCurrentCreds(), 
-                propertyId 
+            window.api.getLibraries({
+                token: ui.getGlobalToken(),
+                creds: ui.getCurrentCreds(),
+                propertyId
             })
         ]);
 
@@ -84,7 +83,7 @@ async function refreshCacheStatus() {
     const propertyId = document.getElementById('compare-prop-select').value;
     if (!propertyId) return;
     try {
-        const stats = await ipcRenderer.invoke('get-cache-stats', { propertyId });
+        const stats = await window.api.getCacheStats({ propertyId });
         const badge = document.getElementById('cache-status-badge');
         if (!stats || stats.rules === 0) {
             badge.textContent = 'Cache: empty';
@@ -167,7 +166,7 @@ async function performEnvironmentComparison() {
         entityBName = document.getElementById('envB-select').options[document.getElementById('envB-select').selectedIndex].text;
 
         const useCache = document.getElementById('chk-use-cache').checked;
-        const result = await ipcRenderer.invoke('perform-environment-comparison', {
+        const result = await window.api.performEnvironmentComparison({
             token: ui.getGlobalToken(),
             creds: ui.getCurrentCreds(),
             envAId,
@@ -348,7 +347,7 @@ async function downloadComparisonNotes() {
     const defaultName = `release-notes-${entityAName}-vs-${entityBName}.md`.replace(/[^a-z0-9]/gi, '-').toLowerCase();
 
     try {
-        const success = await ipcRenderer.invoke('save-file', {
+        const success = await window.api.saveFile({
             content: md,
             defaultName
         });
@@ -400,7 +399,7 @@ window.refreshCacheStatus = refreshCacheStatus;
 window.closeDiffModal = closeDiffModal; // Added to enable closing from HTML button
 
 // --- Module Exports ---
-module.exports = {
+export {
     populateComparisonProperties, // NEW
     loadEnvironmentsForCompare,
     updateComparisonInfo,

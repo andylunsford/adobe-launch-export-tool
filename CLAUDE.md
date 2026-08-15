@@ -12,13 +12,16 @@ npm run dist:linux # Build Linux AppImage
 
 ## Architecture
 
-Two-process Electron app:
+Two-process Electron app, with the renderer context-isolated:
 
 - **Main process** (`main.js`): IPC handlers, file system ops, Adobe Reactor API calls, DB writes
-- **Renderer process** (`index.html`, `renderer.js`, `modules/`): UI logic, calls main via `ipcRenderer.invoke()`
+- **Preload** (`preload.js`): the only bridge; exposes `window.api` via `contextBridge`
+- **Renderer process** (`index.html`, `renderer.js`, `modules/`): UI logic, calls main via `window.api.*`
+
+The renderer runs with `nodeIntegration: false`, `contextIsolation: true`, and `sandbox: true`. It has no `require`, no `process`, and no Node built-ins — it renders Reactor API data, so a stray unescaped string must not be able to reach Node.
 
 Key directories:
-- `modules/` — renderer-side feature modules (archive, auth, compare, export, sync, ui-helpers)
+- `modules/` — renderer-side feature modules (archive, auth, compare, export, sync, ui-helpers), loaded as native ES modules
 - `lib/reactor-core/` — pure JS: API-to-file serialization, diffing, utilities
 - `lib/db/` — SQLite cache layer (better-sqlite3); schema, migrations, public API
 - `__tests__/` — Jest unit tests mirroring `lib/` structure
@@ -26,7 +29,18 @@ Key directories:
 
 ## IPC Pattern
 
-Renderer modules call `ipcRenderer.invoke('handler-name', payload)`. All handlers are registered in `main.js` via `ipcMain.handle()`. Never put API or file-system logic in renderer modules directly.
+Renderer modules call `window.api.methodName(payload)`. Each method is declared individually in `preload.js` and forwards to an `ipcMain.handle()` registration in `main.js`. Never put API or file-system logic in renderer modules directly.
+
+**Adding a channel takes three edits**: register the handler in `main.js`, add a named method in `preload.js`, then call `window.api.*` from the module. Do not add a generic `invoke(channel, payload)` passthrough — naming each channel is what keeps the renderer from reaching arbitrary handlers.
+
+For main→renderer events (`archive-progress`, `sync-log`), `preload.js` exposes a subscribe function that returns an unsubscribe function:
+
+```js
+const off = window.api.onArchiveProgress(({ msg, progress }) => { ... });
+try { ... } finally { off(); }
+```
+
+Listener identity does not survive `contextBridge`, so there is no `removeListener` — always call the returned disposer.
 
 ## Database
 

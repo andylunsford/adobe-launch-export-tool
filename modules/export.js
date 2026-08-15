@@ -3,8 +3,7 @@
  * Handles selection of properties and running the bulk export job.
  */
 
-const { ipcRenderer, shell } = require('electron');
-const ui = require('./ui-helpers');
+import * as ui from './ui-helpers.js';
 
 // --- Start Bulk Export Job ---
 async function startExportJob() {
@@ -24,7 +23,7 @@ async function startExportJob() {
     ui.showLoading(`Exporting ${properties.length} properties...`);
 
     try {
-        const result = await ipcRenderer.invoke('perform-export', {
+        const result = await window.api.performExport({
             properties,
             types,
             token: ui.getGlobalToken(),
@@ -34,7 +33,7 @@ async function startExportJob() {
         ui.hideLoading();
         if (result && result.targetDir) {
             alert(`✅ Export Complete! Files saved to:\n\n${result.targetDir}`);
-            shell.openPath(result.targetDir);
+            window.api.openPath(result.targetDir);
         } else {
             alert("❌ Export Failed: The export process returned an error.");
         }
@@ -58,7 +57,7 @@ async function downloadReleaseNotes() {
     ui.showLoading(`Downloading Release Notes for ${propertyIds.length} properties...`);
 
     try {
-        const result = await ipcRenderer.invoke('download-notes', {
+        const result = await window.api.downloadNotes({
             propertyIds,
             token: ui.getGlobalToken(),
             creds: ui.getCurrentCreds()
@@ -67,7 +66,7 @@ async function downloadReleaseNotes() {
         ui.hideLoading();
         if (result.targetDir) {
             alert(`✅ Release Notes Download Complete! Files saved to:\n\n${result.targetDir}`);
-            shell.openPath(result.targetDir);
+            window.api.openPath(result.targetDir);
         } else {
             alert("❌ Download Failed: The notes download process returned an error.");
         }
@@ -81,7 +80,7 @@ async function downloadReleaseNotes() {
 window.startExportJob = startExportJob;
 window.downloadReleaseNotes = downloadReleaseNotes;
 
-module.exports = {
+export {
     startExportJob,
     downloadReleaseNotes
 };

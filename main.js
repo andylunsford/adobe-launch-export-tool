@@ -16,8 +16,13 @@ function createWindow() {
         width: 1100,
         height: 850,
         webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false
+            // The renderer displays data returned by the Reactor API (rule names,
+            // data element values, extension settings). Isolating it means an
+            // unescaped string from that data cannot reach Node.
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+            preload: path.join(__dirname, 'preload.js')
         }
     });
     win.loadFile('index.html');
@@ -84,6 +89,30 @@ function loadVariables() {
 }
 
 // --- IPC HANDLERS ---
+
+// --- SHELL ---
+// The renderer no longer has `shell`, so these proxy it. openExternal hands a
+// string to the OS handler, so anything but http/https is refused here rather
+// than trusted from the renderer.
+ipcMain.handle('open-external', async (event, url) => {
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return { success: false, error: 'Malformed URL' };
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        console.warn(`[shell] refused openExternal for scheme: ${parsed.protocol}`);
+        return { success: false, error: 'Only http and https URLs may be opened' };
+    }
+    await shell.openExternal(parsed.href);
+    return { success: true };
+});
+
+ipcMain.handle('open-path', async (event, targetPath) => {
+    const err = await shell.openPath(targetPath);
+    return err ? { success: false, error: err } : { success: true };
+});
 
 ipcMain.handle('get-saved-config', () => loadVariables());
 
