@@ -1,4 +1,4 @@
-name: Release
+﻿name: Release
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
         include:
           - os: macos-latest
             name: macOS
-            script: dist:mac
+            flag: --mac
             # Names of the repo secrets holding this platform's cert.
             # Empty until signing is activated - see docs/RELEASING.md.
             csc_link: MAC_CSC_LINK
@@ -28,7 +28,7 @@ jobs:
               dist/*.dmg.blockmap
           - os: windows-latest
             name: Windows
-            script: dist:win
+            flag: --win
             csc_link: WIN_CSC_LINK
             csc_password: WIN_CSC_KEY_PASSWORD
             artifacts: |
@@ -36,7 +36,7 @@ jobs:
               dist/*.exe.blockmap
           - os: ubuntu-latest
             name: Linux
-            script: dist:linux
+            flag: --linux
             csc_link: ''
             csc_password: ''
             artifacts: |
@@ -47,10 +47,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
-      # postinstall runs electron-rebuild against better-sqlite3.
+      # postinstall runs `electron-builder install-app-deps`, which rebuilds
+      # better-sqlite3 against the Electron ABI.
       - name: Install dependencies
         run: npm ci
 
@@ -60,8 +61,10 @@ jobs:
       # unsigned installers and the build still succeeds. Indexing the
       # secrets context by name keeps each platform to its own cert.
       # ---------------------------------------------------------------
+      # Called directly rather than via `npm run` - npm mangles the forwarded
+      # `-- --publish never` into a positional target and the build fails.
       - name: Build installer
-        run: npm run ${{ matrix.script }} -- --publish never
+        run: npx electron-builder ${{ matrix.flag }} --publish never
         env:
           CSC_LINK: ${{ secrets[matrix.csc_link] }}
           CSC_KEY_PASSWORD: ${{ secrets[matrix.csc_password] }}
@@ -119,4 +122,4 @@ jobs:
           body: |
             > **Note:** these installers are not code-signed.
             > macOS: right-click the app and choose **Open** to bypass Gatekeeper.
-            > Windows: click **More info** → **Run anyway** on the SmartScreen prompt.
+            > Windows: click **More info** then **Run anyway** on the SmartScreen prompt.

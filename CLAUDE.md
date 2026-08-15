@@ -4,7 +4,7 @@
 npm start          # Run the Electron app
 npm test           # Jest unit tests (lib/ and __tests__/)
 npm run test:e2e   # Playwright E2E tests (requires xvfb on Linux)
-npm run rebuild    # Rebuild native modules after npm install (better-sqlite3)
+npm run rebuild    # Rebuild native modules against the Electron ABI (better-sqlite3)
 npm run dist:win   # Build Windows installer (.exe)
 npm run dist:mac   # Build macOS dmg (universal)
 npm run dist:linux # Build Linux AppImage
@@ -37,7 +37,7 @@ Renderer modules call `ipcRenderer.invoke('handler-name', payload)`. All handler
 
 ## Gotchas
 
-- **Native module rebuild**: After `npm install`, run `npm run rebuild` or `npm run postinstall` to rebuild `better-sqlite3` against the Electron ABI. Skip this and the app will crash on launch.
+- **Native module rebuild**: `better-sqlite3` must be built against the Electron ABI, not the system Node ABI. `postinstall` runs `electron-builder install-app-deps` automatically on `npm install`, so this is usually handled. If the app crashes on launch with a module-version error, run `npm run rebuild`.
 - **E2E on Linux**: `npm run test:e2e` requires `xvfb-run` (the script includes it). Running `npx playwright test` directly will fail headlessly.
 - **E2E mock injection**: E2E tests inject IPC mocks via `fixtures.js` — don't call real Adobe APIs in tests.
 - **IPC token flow**: Auth token is retrieved in the renderer via `ui.getGlobalToken()` and passed as payload to IPC calls; main.js does not manage auth state.

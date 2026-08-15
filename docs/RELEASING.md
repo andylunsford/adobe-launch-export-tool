@@ -84,12 +84,16 @@ neither.
 
 Two routes:
 
-- **Azure Trusted Signing** (~$10/month) — the cheapest current option, but it
-  requires electron-builder 25+ and a `azureSignOptions` block. This project is
-  on electron-builder 24, so it needs an upgrade first.
+- **Azure Trusted Signing** (~$10/month) — the cheapest current option, and
+  supported directly now that the project is on electron-builder 26. Needs an
+  `azureSignOptions` block in `build.win` plus Azure credentials as secrets. No
+  hardware token, so it works in CI.
 - **Traditional OV certificate** ($200–400/yr) — since June 2023 these ship on
   hardware tokens, which CI cannot read. Usable only via a cloud signing service
   or a self-hosted runner.
+
+Azure Trusted Signing is the recommended route; the OV path exists mainly if you
+already own a certificate.
 
 For the OV/`.p12` route, add:
 
