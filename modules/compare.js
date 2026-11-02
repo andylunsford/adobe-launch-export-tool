@@ -8,11 +8,15 @@ import * as ui from './ui-helpers.js';
 let currentComparison = null;
 let entityAName = '';
 let entityBName = '';
+// The chosen property's environments and libraries, kept so a mode change can
+// re-list them and the details pane can read them without refetching.
+let compareEntities = { environments: [], libraries: [] };
 
 // --- Populate Property Dropdown from Selected List ---
 function populateComparisonProperties() {
     const selectedProperties = ui.getSelectedProperties();
     const select = document.getElementById('compare-prop-select');
+    const previous = select.value;
     select.innerHTML = '<option value="">Select Property...</option>';
     
     if (selectedProperties.length === 0) {
@@ -27,7 +31,17 @@ function populateComparisonProperties() {
         opt.dataset.name = prop.name;
         select.appendChild(opt);
     });
+
+    // Keep the property already being compared, so a refresh doesn't reset it
+    // while its environments are still loaded below.
+    if (selectedProperties.some(prop => prop.id === previous)) select.value = previous;
 }
+
+// The dropdown lists the globally selected properties, which can change while
+// this tab is open, so rebuild it whenever the selection does. Select-all sets
+// `checked` without firing change on each box, hence the second listener.
+document.getElementById('property-list').addEventListener('change', populateComparisonProperties);
+document.getElementById('select-all-toggle').addEventListener('change', populateComparisonProperties);
 
 // --- Load Environments/Libraries for Compare ---
 async function loadEnvironmentsForCompare() {
@@ -50,24 +64,8 @@ async function loadEnvironmentsForCompare() {
             })
         ]);
 
-        const data = [...environments, ...libraries];
-        
-        const envASelect = document.getElementById('envA-select');
-        const envBSelect = document.getElementById('envB-select');
-        [envASelect, envBSelect].forEach(select => {
-            select.innerHTML = '<option value="">Select Environment or Library...</option>';
-            data.forEach(item => {
-                const opt = document.createElement('option');
-                opt.value = item.id;
-                opt.innerText = item.attributes.name;
-                opt.dataset.type = item.type; // environment or library
-                opt.dataset.buildId = item.relationships?.latest_build?.data?.id || 'N/A';
-                opt.dataset.buildStatus = item.attributes?.status || 'N/A';
-                opt.dataset.libraryStatus = item.attributes?.status || 'N/A'; // Library status for the library itself
-                opt.title = `${item.type}: ${item.attributes.name}`;
-                select.appendChild(opt);
-            });
-        });
+        compareEntities = { environments, libraries };
+        renderEntityOptions();
 
         await refreshCacheStatus();
 
@@ -102,29 +100,74 @@ async function refreshCacheStatus() {
     }
 }
 
+// --- List What the Current Mode Compares ---
+// Libraries mode takes libraries; environments and history modes take
+// environments (history diffs an environment's last two builds).
+function renderEntityOptions() {
+    const mode = document.getElementById('compare-mode-select').value;
+    const items = mode === 'libraries' ? compareEntities.libraries : compareEntities.environments;
+    const noun = mode === 'libraries' ? 'Library' : 'Environment';
+
+    [['envA-select', 'envA-library-info'], ['envB-select', 'envB-library-info']].forEach(([selectId, infoId]) => {
+        const select = document.getElementById(selectId);
+        const previous = select.value;
+        select.innerHTML = `<option value="">Select ${noun}...</option>`;
+        items.forEach(item => {
+            const opt = document.createElement('option');
+            opt.value = item.id;
+            opt.innerText = item.attributes.name;
+            select.appendChild(opt);
+        });
+        if (items.some(item => item.id === previous)) select.value = previous;
+        updateComparisonInfo(selectId, infoId);
+    });
+}
+
+const formatDate = (iso) => iso ? new Date(iso).toLocaleString() : 'unknown';
+
+// Label/value rows, built with textContent because the values are API data.
+function showInfo(infoDiv, rows) {
+    infoDiv.replaceChildren(...rows.map(([label, value]) => {
+        const row = document.createElement('div');
+        const strong = document.createElement('strong');
+        strong.textContent = `${label}: `;
+        row.append(strong, String(value ?? 'unknown'));
+        return row;
+    }));
+}
+
 // --- Update Info Display on Selection Change ---
-function updateComparisonInfo(selectId, infoId) {
+async function updateComparisonInfo(selectId, infoId) {
     const select = document.getElementById(selectId);
     const infoDiv = document.getElementById(infoId);
-    const selectedOpt = select.options[select.selectedIndex];
+    const id = select.value;
+    const library = compareEntities.libraries.find(l => l.id === id);
+    const environment = compareEntities.environments.find(e => e.id === id);
 
-    if (!selectedOpt || !selectedOpt.value) {
-        infoDiv.innerHTML = 'Select an environment or library to see status.';
-        return;
-    }
-
-    const type = selectedOpt.dataset.type;
-    const name = selectedOpt.innerText;
-    
-    if (type === 'environments') {
-        const buildId = selectedOpt.dataset.buildId;
-        const buildStatus = selectedOpt.dataset.buildStatus;
-        infoDiv.innerHTML = `**Environment**<br>Latest Build ID: ${buildId}<br>Status: ${buildStatus}`;
-    } else if (type === 'libraries') {
-        const libraryStatus = selectedOpt.dataset.libraryStatus;
-        infoDiv.innerHTML = `**Library**<br>Status: ${libraryStatus}`;
+    if (library) {
+        const { state, published_at, updated_at, build_required } = library.attributes;
+        showInfo(infoDiv, [
+            ['State', library.meta?.currently_live ? `${state} (live in production)` : state],
+            ['Last build', library.relationships?.last_build?.data?.id || 'none yet'],
+            published_at ? ['Published', formatDate(published_at)] : ['Updated', formatDate(updated_at)],
+            ...(build_required ? [['Build required', 'yes, it has changed since its last build']] : [])
+        ]);
+    } else if (environment) {
+        // An environment's `status` is its own setup status, not a build's.
+        // What it runs is its newest succeeded build, which main looks up.
+        const stage = ['Stage', environment.attributes.stage];
+        showInfo(infoDiv, [stage, ['Deployed', 'loading...']]);
+        const deployed = await window.api.getEnvironmentLibrary({
+            token: ui.getGlobalToken(),
+            creds: ui.getCurrentCreds(),
+            environmentId: id
+        });
+        if (select.value !== id) return; // the selection moved on while this loaded
+        showInfo(infoDiv, deployed
+            ? [stage, ['Library', deployed.libraryName], ['Build', deployed.buildId], ['Built', formatDate(deployed.buildDate)]]
+            : [stage, ['Deployed', 'no succeeded build found']]);
     } else {
-        infoDiv.innerHTML = `Info unavailable for ${type}.`;
+        infoDiv.textContent = 'Select an environment or library to see status.';
     }
 }
 
@@ -148,6 +191,8 @@ function handleCompareModeChange() {
         lblB.innerText = '(N/A - History Mode)';
         colB.classList.add('hidden');
     }
+
+    renderEntityOptions();
 }
 
 // --- Perform Comparison ---
