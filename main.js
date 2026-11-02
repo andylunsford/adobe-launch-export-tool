@@ -244,6 +244,7 @@ ipcMain.handle('get-environment-library', async (event, { token, creds, environm
             return {
                 libraryId: libraryId,
                 libraryName: libRes.data.data.attributes.name,
+                buildId: latestBuild.id,
                 buildDate: latestBuild.attributes.updated_at
             };
         }

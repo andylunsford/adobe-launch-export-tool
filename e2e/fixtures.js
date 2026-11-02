@@ -33,14 +33,21 @@ const MOCK_DATA = {
         { id: 'PR_MOCK_003', attributes: { name: 'Mock Property Three', platform: 'web' } },
     ],
     environments: [
-        { id: 'EN_DEV', attributes: { name: 'Development', stage: 'development' } },
-        { id: 'EN_STG', attributes: { name: 'Staging',     stage: 'staging' } },
-        { id: 'EN_PRD', attributes: { name: 'Production',  stage: 'production' } },
+        { id: 'EN_DEV', type: 'environments', attributes: { name: 'Development', stage: 'development', status: 'succeeded' } },
+        { id: 'EN_STG', type: 'environments', attributes: { name: 'Staging',     stage: 'staging',     status: 'succeeded' } },
+        { id: 'EN_PRD', type: 'environments', attributes: { name: 'Production',  stage: 'production',  status: 'succeeded' } },
     ],
     libraries: [
-        { id: 'LB_001', attributes: { name: 'Library 1.0', state: 'published', updated_at: '2026-01-01' } },
+        {
+            id: 'LB_001',
+            type: 'libraries',
+            attributes: { name: 'Library 1.0', state: 'published', build_required: false,
+                          published_at: '2026-01-15T12:00:00Z', updated_at: '2026-01-15T12:00:00Z' },
+            meta: { build_status: null, currently_live: true },
+            relationships: { last_build: { data: { id: 'BL_001', type: 'builds' } } },
+        },
     ],
-    envLibrary: { libraryId: 'LB_001', libraryName: 'Library 1.0', buildDate: '2026-01-15T12:00:00Z' },
+    envLibrary: { libraryId: 'LB_001', libraryName: 'Library 1.0', buildId: 'BL_001', buildDate: '2026-01-15T12:00:00Z' },
 };
 
 // ---------------------------------------------------------------------------

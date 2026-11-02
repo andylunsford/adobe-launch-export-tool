@@ -106,22 +106,57 @@ test.describe('Environment Comparison tab', () => {
             .toHaveCount(MOCK_DATA.properties.length + 1, { timeout: 10_000 });
     });
 
-    test('choosing a property loads its environments and libraries', async ({ mockedWindow }) => {
-        await setupMainInterface(mockedWindow);
+    /** Select every property, open the compare tab and choose the first property. */
+    async function openCompareWithProperty(win) {
+        await setupMainInterface(win);
+        await win.locator('button.icon-btn[title="Select Properties"]').click();
+        await expect(win.locator('#property-list .prop-item').first()).toBeVisible({ timeout: 10_000 });
+        await win.locator('#select-all-toggle').check();
+        await win.locator('#property-select-panel button.primary').click(); // Done
+        await win.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
+        await win.locator('#compare-prop-select').selectOption(MOCK_DATA.properties[0].id);
+    }
 
-        await mockedWindow.locator('button.icon-btn[title="Select Properties"]').click();
-        await expect(mockedWindow.locator('#property-list .prop-item').first()).toBeVisible({ timeout: 10_000 });
-        await mockedWindow.locator('#select-all-toggle').check();
-        await mockedWindow.locator('#property-select-panel button.primary').click(); // Done
+    test('each compare mode lists only what it compares', async ({ mockedWindow }) => {
+        await openCompareWithProperty(mockedWindow);
+        const optionsA = mockedWindow.locator('#envA-select option');
+        const optionsB = mockedWindow.locator('#envB-select option');
+        const environments = MOCK_DATA.environments.length + 1; // + placeholder
+        const libraries = MOCK_DATA.libraries.length + 1;
 
-        await mockedWindow.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
-        await mockedWindow.locator('#compare-prop-select').selectOption(MOCK_DATA.properties[0].id);
-
-        // Placeholder + every environment and library of the property, in both selects
-        const expected = MOCK_DATA.environments.length + MOCK_DATA.libraries.length + 1;
-        await expect(mockedWindow.locator('#envA-select option')).toHaveCount(expected, { timeout: 10_000 });
-        await expect(mockedWindow.locator('#envB-select option')).toHaveCount(expected);
+        await expect(optionsA).toHaveCount(environments, { timeout: 10_000 });
+        await expect(optionsB).toHaveCount(environments);
         await expect(mockedWindow.locator('#loading-overlay')).toHaveClass(/hidden/);
+
+        await mockedWindow.locator('#compare-mode-select').selectOption('libraries');
+        await expect(optionsA).toHaveCount(libraries);
+        await expect(optionsB).toHaveCount(libraries);
+
+        // History compares an environment's own builds, so it takes environments only
+        await mockedWindow.locator('#compare-mode-select').selectOption('history');
+        await expect(optionsA).toHaveCount(environments);
+    });
+
+    test('environment details show the deployed library and build', async ({ mockedWindow }) => {
+        await openCompareWithProperty(mockedWindow);
+        await mockedWindow.locator('#envA-select').selectOption('EN_PRD');
+
+        const info = mockedWindow.locator('#envA-library-info');
+        await expect(info).toContainText('production');
+        await expect(info).toContainText(MOCK_DATA.envLibrary.libraryName);
+        await expect(info).toContainText(MOCK_DATA.envLibrary.buildId);
+        await expect(info).not.toContainText('N/A');
+    });
+
+    test('library details show its state and last build', async ({ mockedWindow }) => {
+        await openCompareWithProperty(mockedWindow);
+        await mockedWindow.locator('#compare-mode-select').selectOption('libraries');
+        await mockedWindow.locator('#envA-select').selectOption('LB_001');
+
+        const info = mockedWindow.locator('#envA-library-info');
+        await expect(info).toContainText('published');
+        await expect(info).toContainText('BL_001');
+        await expect(info).not.toContainText('N/A');
     });
 });
 
