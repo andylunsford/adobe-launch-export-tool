@@ -4,7 +4,8 @@ const fs = require('fs');
 const axios = require('axios');
 const https = require('https');
 const reactorCore = require('./lib/reactor-core');
-const { listAll, latestSucceededBuild, latestSucceededBuilds } = reactorCore.api;
+const { listAll, latestSucceededBuild, latestSucceededBuilds, latestSucceededLibraryBuild } = reactorCore.api;
+const { diffSets } = reactorCore.compareBuilds;
 const db = require('./lib/db');
 
 // --- TLS ---
@@ -256,53 +257,40 @@ ipcMain.handle('get-environment-library', async (event, { token, creds, environm
     }
 });
 
-ipcMain.handle('perform-environment-comparison', async (event, { token, creds, envAId, envBId, mode, useCache }) => {
+ipcMain.handle('perform-environment-comparison', async (event, { token, creds, envAId, envBId, mode, useCache, propertyId }) => {
     try {
         const get = reactorGet(getHeaders(token, creds));
 
-        // Helper to fetch build contents
+        // Component timeouts and delays only take effect when the property runs
+        // rule components in sequence, so only then do they count as changes.
+        // Unknown counts as on, which reports more rather than less.
+        const sequencing = propertyId
+            ? get(`https://reactor.adobe.io/properties/${propertyId}`)
+                .then(body => body.data.attributes.rule_component_sequencing_enabled !== false, () => true)
+            : Promise.resolve(true);
+
+        // A build's effective set. Rule components are fetched later, and only
+        // for rules whose revision differs between the two sides.
         async function fetchBuildContents(buildId) {
             const [rules, data_elements, extensions] = await Promise.all([
                 listAll(get, `https://reactor.adobe.io/builds/${buildId}/rules`),
                 listAll(get, `https://reactor.adobe.io/builds/${buildId}/data_elements`),
                 listAll(get, `https://reactor.adobe.io/builds/${buildId}/extensions`)
             ]);
-
-            const rulesWithComponents = await Promise.all(rules.map(async (rule) => {
-                try {
-                    const ruleComponentsUrl = rule.relationships?.rule_components?.links?.related;
-                    if (ruleComponentsUrl) {
-                        const components = await listAll(get, ruleComponentsUrl);
-                        return { ...rule, rule_components: components };
-                    }
-                    return rule;
-                } catch (error) {
-                    console.error(`Error fetching components for rule ${rule.id}:`, error.message);
-                    return rule;
-                }
-            }));
-
-            return { rules: rulesWithComponents, data_elements, extensions, buildId };
+            return { rules, data_elements, extensions, buildId };
         }
 
         // Helper function to fetch build data for an environment OR library
         async function fetchEnvironmentData(entityId) {
             if (entityId.startsWith('LB')) {
-                // It's a Library
-                const [rules, data_elements, extensions] = await Promise.all([
-                    listAll(get, `https://reactor.adobe.io/libraries/${entityId}/rules`),
-                    listAll(get, `https://reactor.adobe.io/libraries/${entityId}/data_elements`),
-                    listAll(get, `https://reactor.adobe.io/libraries/${entityId}/extensions`)
-                ]);
-
-                const rulesWithComponents = await Promise.all(rules.map(async (rule) => {
-                    try {
-                        const components = await listAll(get, `https://reactor.adobe.io/rules/${rule.id}/rule_components`);
-                        return { ...rule, rule_components: components };
-                    } catch (e) { return rule; }
-                }));
-
-                return { rules: rulesWithComponents, data_elements, extensions, buildId: entityId };
+                // A library's own lists hold only its changes. The release is
+                // its newest succeeded build, which holds everything upstream too.
+                const build = await latestSucceededLibraryBuild(get, entityId);
+                if (!build) {
+                    const library = await get(`https://reactor.adobe.io/libraries/${entityId}`);
+                    throw new Error(`Library "${library.data.attributes.name}" has no successful build yet, so there is nothing to compare. Build it first.`);
+                }
+                return await fetchBuildContents(build.id);
             } else {
                 // It's an Environment -> what it runs is its newest succeeded build
                 const build = await latestSucceededBuild(get, entityId);
@@ -332,7 +320,9 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
         let fromCache = false;
         let envAData, envBData;
 
-        if (useCache && mode !== 'history') {
+        // The cache stores library own lists, which aren't what a library
+        // compare reads any more, so only environment mode may use it.
+        if (useCache && mode === 'environments') {
             const cA = fetchFromCache(envAId);
             const cB = fetchFromCache(envBId);
             if (cA && cB) {
@@ -371,203 +361,13 @@ ipcMain.handle('perform-environment-comparison', async (event, { token, creds, e
             }
         }
 
-        // Write-through: cache the comparison data for next time
-        if (!fromCache && mode !== 'history') {
-            try {
-                const writeThrough = (data) => {
-                    const libId = data.buildId?.startsWith('LB') ? data.buildId : null;
-                    if (!libId) return;
-                    // propertyId is null here — comparison data is keyed by libraryId (junction tables),
-                    // not by property. Stats and scoped-clear won't see this data, which is acceptable.
-                    db.upsertRules(data.rules, null);
-                    db.linkLibraryRules(libId, data.rules);
-                    // Write rule components for each rule
-                    for (const rule of data.rules) {
-                        if (rule.rule_components && rule.rule_components.length > 0) {
-                            db.upsertRuleComponents(rule.rule_components, rule.id, null);
-                        }
-                    }
-                    db.upsertDataElements(data.data_elements, null);
-                    db.linkLibraryDataElements(libId, data.data_elements);
-                    db.upsertExtensions(data.extensions, null);
-                    db.linkLibraryExtensions(libId, data.extensions);
-                };
-                writeThrough(envAData);
-                writeThrough(envBData);
-            } catch (e) { console.error('[DB] post-comparison cache write:', e.message); }
-        }
+        // A rule revision's components, fetched only for rules on different
+        // revisions: the same revision on both sides is the same rule.
+        const loadComponents = (rule) => rule.rule_components
+            ? Promise.resolve(rule.rule_components)
+            : listAll(get, `https://reactor.adobe.io/rules/${rule.id}/rule_components`);
 
-        // Helper function to compare arrays of items
-        function compareItems(itemsA, itemsB, itemType) {
-            // Use origin ID as the stable identifier (falls back to item.id if no origin)
-            // This ensures that renamed/modified items are properly matched across builds
-            const getStableId = (item) => {
-                return item.relationships?.origin?.data?.id || item.id;
-            };
-
-            const mapA = new Map(itemsA.map(item => [getStableId(item), item]));
-            const mapB = new Map(itemsB.map(item => [getStableId(item), item]));
-
-            const onlyInA = [];
-            const onlyInB = [];
-            const modified = [];
-            const identical = [];
-
-            // Check items in A - using origin ID as source of truth
-            for (const [stableId, itemA] of mapA) {
-                if (!mapB.has(stableId)) {
-                    // Item exists in A but not in B
-                    onlyInA.push({
-                        id: itemA.id,
-                        name: itemA.attributes.name || itemA.attributes.display_name,
-                        revisionNumber: itemA.attributes.revision_number,
-                        item: itemA
-                    });
-                } else {
-                    const itemB = mapB.get(stableId);
-                    // Compare by checking if settings are different
-                    const settingsA = JSON.stringify(itemA.attributes);
-                    const settingsB = JSON.stringify(itemB.attributes);
-
-                    // For rules, also compare rule components
-                    const componentsA = itemA.rule_components ? JSON.stringify(itemA.rule_components) : null;
-                    const componentsB = itemB.rule_components ? JSON.stringify(itemB.rule_components) : null;
-
-                    if (settingsA !== settingsB || componentsA !== componentsB) {
-                        // Item modified - show both old and new names if renamed
-                        const nameA = itemA.attributes.name || itemA.attributes.display_name;
-                        const nameB = itemB.attributes.name || itemB.attributes.display_name;
-                        const displayName = nameA !== nameB ? `${nameA} → ${nameB}` : nameB;
-
-                        // Create detailed diff of attributes
-                        const attributeDiffs = [];
-                        const allKeys = new Set([...Object.keys(itemA.attributes), ...Object.keys(itemB.attributes)]);
-
-                        for (const key of allKeys) {
-                            const valueA = itemA.attributes[key];
-                            const valueB = itemB.attributes[key];
-
-                            // Skip certain metadata fields that aren't meaningful for comparison
-                            if (['created_at', 'updated_at', 'published_at', 'dirty', 'published', 'review_status', 'updated_by_email', 'updated_by_display_name'].includes(key)) {
-                                continue;
-                            }
-
-                            if (JSON.stringify(valueA) !== JSON.stringify(valueB)) {
-                                attributeDiffs.push({
-                                    field: key,
-                                    oldValue: valueA,
-                                    newValue: valueB
-                                });
-                            }
-                        }
-
-                        // For rules, compare rule components (events, actions, conditions)
-                        let componentDiffs = [];
-                        if (itemA.rule_components || itemB.rule_components) {
-                            const getComponentStableId = (comp) => comp.relationships?.origin?.data?.id || comp.id;
-
-                            const componentsMapA = new Map((itemA.rule_components || []).map(c => [getComponentStableId(c), c]));
-                            const componentsMapB = new Map((itemB.rule_components || []).map(c => [getComponentStableId(c), c]));
-
-                            // Find added, removed, and modified components
-                            const allComponentIds = new Set([...componentsMapA.keys(), ...componentsMapB.keys()]);
-
-                            for (const componentId of allComponentIds) {
-                                const compA = componentsMapA.get(componentId);
-                                const compB = componentsMapB.get(componentId);
-
-                                if (!compA && compB) {
-                                    // Component added
-                                    componentDiffs.push({
-                                        type: 'added',
-                                        componentType: compB.attributes.delegate_descriptor_id,
-                                        name: compB.attributes.name || compB.attributes.delegate_descriptor_id,
-                                        component: compB
-                                    });
-                                } else if (compA && !compB) {
-                                    // Component removed
-                                    componentDiffs.push({
-                                        type: 'removed',
-                                        componentType: compA.attributes.delegate_descriptor_id,
-                                        name: compA.attributes.name || compA.attributes.delegate_descriptor_id,
-                                        component: compA
-                                    });
-                                } else if (compA && compB) {
-                                    // Check if component modified
-                                    // Define a helper to stringify attributes excluding ignored fields
-                                    const stringifyAttributes = (attrs) => {
-                                        const cleanAttrs = { ...attrs };
-                                        ['created_at', 'updated_at', 'dirty', 'published', 'review_status', 'updated_by_email', 'updated_by_display_name'].forEach(key => delete cleanAttrs[key]);
-                                        return JSON.stringify(cleanAttrs);
-                                    };
-
-                                    const settingsCompA = stringifyAttributes(compA.attributes);
-                                    const settingsCompB = stringifyAttributes(compB.attributes);
-
-                                    const nameA = compA.attributes.name || compA.attributes.delegate_descriptor_id;
-                                    const nameB = compB.attributes.name || compB.attributes.delegate_descriptor_id;
-                                    const renamed = nameA !== nameB;
-
-                                    if (settingsCompA !== settingsCompB || renamed) {
-                                        componentDiffs.push({
-                                            type: 'modified',
-                                            componentType: compB.attributes.delegate_descriptor_id,
-                                            name: nameB,
-                                            oldName: renamed ? nameA : null,
-                                            newName: renamed ? nameB : null,
-                                            componentA: compA,
-                                            componentB: compB
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        modified.push({
-                            id: itemB.id,
-                            name: displayName,
-                            oldName: nameA,
-                            newName: nameB,
-                            revisionNumberA: itemA.attributes.revision_number,
-                            revisionNumberB: itemB.attributes.revision_number,
-                            itemA: itemA,  // Store full item data for detailed diff
-                            itemB: itemB,
-                            attributeDiffs: attributeDiffs,
-                            componentDiffs: componentDiffs
-                        });
-                    } else {
-                        // Item is identical
-                        identical.push({
-                            id: itemA.id,
-                            name: itemA.attributes.name,
-                            revisionNumber: itemA.attributes.revision_number
-                        });
-                    }
-                }
-            }
-
-            // Check items only in B
-            for (const [stableId, itemB] of mapB) {
-                if (!mapA.has(stableId)) {
-                    // Item exists in B but not in A
-                    onlyInB.push({
-                        id: itemB.id,
-                        name: itemB.attributes.name || itemB.attributes.display_name,
-                        revisionNumber: itemB.attributes.revision_number,
-                        item: itemB // Store full item for detailed view
-                    });
-                }
-            }
-
-            return { onlyInA, onlyInB, modified, identical };
-        }
-
-        // Compare each type
-        const comparison = {
-            rules: compareItems(envAData.rules, envBData.rules, 'rules'),
-            data_elements: compareItems(envAData.data_elements, envBData.data_elements, 'data_elements'),
-            extensions: compareItems(envAData.extensions, envBData.extensions, 'extensions')
-        };
+        const comparison = await diffSets(envAData, envBData, { loadComponents, sequencing: await sequencing });
 
         return { ...comparison, fromCache };
     } catch (error) {

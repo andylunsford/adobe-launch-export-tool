@@ -148,6 +148,22 @@ test.describe('Environment Comparison tab', () => {
         await expect(info).not.toContainText('N/A');
     });
 
+    test('a comparison lists real changes and only counts revisions that changed nothing', async ({ electronApp, mockedWindow }) => {
+        await openCompareWithProperty(mockedWindow);
+        await mockedWindow.locator('#envA-select').selectOption('EN_PRD');
+        await mockedWindow.locator('#envB-select').selectOption('EN_DEV');
+        await mockedWindow.locator('button.primary[onclick="performEnvironmentComparison()"]').click();
+
+        const results = mockedWindow.locator('#comparison-content');
+        await expect(results).toContainText('Page View', { timeout: 10_000 });
+        await expect(results).toContainText('1 rule has a new revision with no changes');
+        await expect(results).not.toContainText('Click (Click to see changes)');
+
+        // The property decides whether component timeouts and delays count
+        const payload = await electronApp.evaluate(() => globalThis.__lastComparePayload);
+        expect(payload.propertyId).toBe(MOCK_DATA.properties[0].id);
+    });
+
     test('library details show its state and last build', async ({ mockedWindow }) => {
         await openCompareWithProperty(mockedWindow);
         await mockedWindow.locator('#compare-mode-select').selectOption('libraries');

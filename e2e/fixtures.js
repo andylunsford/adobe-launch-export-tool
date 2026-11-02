@@ -48,6 +48,28 @@ const MOCK_DATA = {
         },
     ],
     envLibrary: { libraryId: 'LB_001', libraryName: 'Library 1.0', buildId: 'BL_001', buildDate: '2026-01-15T12:00:00Z' },
+    // What lib/reactor-core/compare-builds diffSets returns: one rule with a
+    // changed action, one rule re-revised with nothing changed.
+    comparison: {
+        rules: {
+            onlyInA: [], onlyInB: [], identical: [],
+            modified: [{
+                id: 'RL_PVr2', name: 'Page View', oldName: 'Page View', newName: 'Page View',
+                revisionNumberA: 1, revisionNumberB: 2, attributeDiffs: [],
+                componentDiffs: [{
+                    type: 'modified', name: 'Track', componentType: 'core::actions::custom-code',
+                    attributeDiffs: [{ field: 'settings', oldValue: { source: 'run();' }, newValue: { source: 'track();' } }]
+                }]
+            }],
+            revised: [{
+                id: 'RL_CLr2', name: 'Click', oldName: 'Click', newName: 'Click',
+                revisionNumberA: 1, revisionNumberB: 2, attributeDiffs: [], componentDiffs: []
+            }]
+        },
+        data_elements: { onlyInA: [], onlyInB: [], modified: [], revised: [], identical: [] },
+        extensions: { onlyInA: [], onlyInB: [], modified: [], revised: [], identical: [] },
+        fromCache: false
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -84,10 +106,11 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
         ipcMain.handle('get-environments',        () => data.environments);
         ipcMain.handle('get-libraries',           () => data.libraries);
         ipcMain.handle('get-environment-library', () => data.envLibrary);
-        ipcMain.handle('perform-environment-comparison', () => ({
-            rulesA: [], rulesB: [], dataElementsA: [], dataElementsB: [],
-            extensionsA: [], extensionsB: [],
-        }));
+        // Keeps the last payload so a test can check what the renderer sent.
+        ipcMain.handle('perform-environment-comparison', (_event, payload) => {
+            globalThis.__lastComparePayload = payload;
+            return data.comparison;
+        });
         ipcMain.handle('get-cache-stats', () => ({
             rules: 0, data_elements: 0, extensions: 0,
             rule_components: 0, environments: 0, libraries: 0,

@@ -217,7 +217,8 @@ async function performEnvironmentComparison() {
             envAId,
             envBId,
             mode,
-            useCache
+            useCache,
+            propertyId: document.getElementById('compare-prop-select').value
         });
 
         currentComparison = result;
@@ -251,10 +252,21 @@ function displayComparisonResults(result) {
     ];
 
     let hasDifferences = false;
+    // New revisions that change nothing (revising a rule revises all of its
+    // components) are counted, not listed as changes.
+    const revisedNotes = [];
 
     resourceTypes.forEach(type => {
         const typeData = result[type.key];
         if (!typeData) return;
+
+        const revisedCount = typeData.revised?.length || 0;
+        if (revisedCount > 0) {
+            const noun = type.label.toLowerCase();
+            revisedNotes.push(revisedCount === 1
+                ? `1 ${noun.replace(/s$/, '')} has a new revision with no changes.`
+                : `${revisedCount} ${noun} have a new revision with no changes.`);
+        }
 
         const sections = [
             { key: 'onlyInB', title: `New ${type.label} (Added to ${entityBName})`, class: 'diff-added' },
@@ -325,6 +337,13 @@ function displayComparisonResults(result) {
     if (!hasDifferences) {
         container.innerHTML = `<p class="diff-identical" style="padding: 15px; background: var(--input-bg); border-radius: 6px; text-align: center;">✅ No differences found between ${entityAName} and ${entityBName}.</p>`;
     }
+
+    revisedNotes.forEach(text => {
+        const note = document.createElement('p');
+        note.style.cssText = 'font-size:12px; color:var(--text-muted); margin:10px 0 0;';
+        note.textContent = text;
+        container.appendChild(note);
+    });
 }
 
 // --- Download Comparison Notes ---
