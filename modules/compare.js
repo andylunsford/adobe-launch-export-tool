@@ -13,6 +13,7 @@ let entityBName = '';
 function populateComparisonProperties() {
     const selectedProperties = ui.getSelectedProperties();
     const select = document.getElementById('compare-prop-select');
+    const previous = select.value;
     select.innerHTML = '<option value="">Select Property...</option>';
     
     if (selectedProperties.length === 0) {
@@ -27,7 +28,17 @@ function populateComparisonProperties() {
         opt.dataset.name = prop.name;
         select.appendChild(opt);
     });
+
+    // Keep the property already being compared, so a refresh doesn't reset it
+    // while its environments are still loaded below.
+    if (selectedProperties.some(prop => prop.id === previous)) select.value = previous;
 }
+
+// The dropdown lists the globally selected properties, which can change while
+// this tab is open, so rebuild it whenever the selection does. Select-all sets
+// `checked` without firing change on each box, hence the second listener.
+document.getElementById('property-list').addEventListener('change', populateComparisonProperties);
+document.getElementById('select-all-toggle').addEventListener('change', populateComparisonProperties);
 
 // --- Load Environments/Libraries for Compare ---
 async function loadEnvironmentsForCompare() {

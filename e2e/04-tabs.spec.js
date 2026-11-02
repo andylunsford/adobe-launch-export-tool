@@ -89,6 +89,40 @@ test.describe('Environment Comparison tab', () => {
         const opts = mockedWindow.locator('#compare-prop-select option');
         await expect(opts).toHaveCount(MOCK_DATA.properties.length + 1, { timeout: 10_000 });
     });
+
+    test('property dropdown picks up properties selected after the tab was opened', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+
+        // Open the compare tab before any property is selected
+        await mockedWindow.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
+        await expect(mockedWindow.locator('#compare-prop-select option')).toHaveCount(1);
+
+        await mockedWindow.locator('button.icon-btn[title="Select Properties"]').click();
+        await expect(mockedWindow.locator('#property-list .prop-item').first()).toBeVisible({ timeout: 10_000 });
+        await mockedWindow.locator('#select-all-toggle').check();
+        await mockedWindow.locator('#property-select-panel button.primary').click(); // Done
+
+        await expect(mockedWindow.locator('#compare-prop-select option'))
+            .toHaveCount(MOCK_DATA.properties.length + 1, { timeout: 10_000 });
+    });
+
+    test('choosing a property loads its environments and libraries', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+
+        await mockedWindow.locator('button.icon-btn[title="Select Properties"]').click();
+        await expect(mockedWindow.locator('#property-list .prop-item').first()).toBeVisible({ timeout: 10_000 });
+        await mockedWindow.locator('#select-all-toggle').check();
+        await mockedWindow.locator('#property-select-panel button.primary').click(); // Done
+
+        await mockedWindow.locator('.tab-btn', { hasText: 'Environment Comparison' }).click();
+        await mockedWindow.locator('#compare-prop-select').selectOption(MOCK_DATA.properties[0].id);
+
+        // Placeholder + every environment and library of the property, in both selects
+        const expected = MOCK_DATA.environments.length + MOCK_DATA.libraries.length + 1;
+        await expect(mockedWindow.locator('#envA-select option')).toHaveCount(expected, { timeout: 10_000 });
+        await expect(mockedWindow.locator('#envB-select option')).toHaveCount(expected);
+        await expect(mockedWindow.locator('#loading-overlay')).toHaveClass(/hidden/);
+    });
 });
 
 test.describe('History Archive tab', () => {
