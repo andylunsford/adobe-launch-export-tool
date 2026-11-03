@@ -85,6 +85,29 @@ const MOCK_DATA = {
         extensions: { onlyInA: [], onlyInB: [], modified: [], revised: [], identical: [] },
         fromCache: false
     },
+    // What lib/reactor-core/diff/runner returns: one item in each state, and a
+    // type whose list failed.
+    syncDiff: {
+        hasBase: true,
+        added: [],
+        modified: [{ type: 'rule_components', id: 'RC_TRACK', path: 'sync/rule_components/RC_TRACK', name: 'Track', rule_id: 'RL_PV', rule_name: 'Page View' }],
+        deleted: [{ type: 'rules', id: 'RL_GONE', path: 'sync/rules/RL_GONE', name: 'Removed Here' }],
+        behind: [{ type: 'data_elements', id: 'DE_PAGE', path: 'sync/data_elements/DE_PAGE', name: 'Page Name' }],
+        deletedInLaunch: [{ type: 'rules', id: 'RL_OLD', path: 'sync/rules/RL_OLD', name: 'Old Campaign' }],
+        conflict: [{ type: 'data_elements', id: 'DE_CART', path: 'sync/data_elements/DE_CART', name: 'Cart',
+                     details: { reason: 'changed locally and in Launch', attributes: {} } }],
+        unchanged: [{ type: 'rules', id: 'RL_PV', path: 'sync/rules/RL_PV', name: 'Page View' }],
+        errors: [{ type: 'extensions', message: "Couldn't list extensions: Request failed with status code 500" }]
+    },
+    // What lib/reactor-core/sync writeDownload returns.
+    syncDownload: {
+        written: 120,
+        removedFiles: 3,
+        keptLocal: [{ type: 'data_elements', id: 'DE_CART', name: 'Cart' }],
+        setAside: [{ type: 'rules', id: 'RL_OLD', name: 'Old Campaign' }],
+        keptUnlisted: [],
+        incomplete: []
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -103,7 +126,8 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             'get-environments', 'get-libraries', 'get-environment-library',
             'perform-environment-comparison', 'save-file',
             'get-cache-stats', 'clear-cache', 'perform-archive-scan',
-            'resume-archive-run',
+            'resume-archive-run', 'select-folder', 'perform-sync-download',
+            'perform-sync-diff',
         ];
         channels.forEach(ch => { try { ipcMain.removeHandler(ch); } catch (_) {} });
 
@@ -150,6 +174,9 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             return scan;
         });
         ipcMain.handle('resume-archive-run', () => ({ success: true }));
+        ipcMain.handle('select-folder', () => 'C:/mock-sync');
+        ipcMain.handle('perform-sync-download', () => data.syncDownload);
+        ipcMain.handle('perform-sync-diff', () => data.syncDiff);
     }, { outcome: loginOutcome, data: MOCK_DATA });
 }
 

@@ -256,3 +256,45 @@ test.describe('History Archive tab', () => {
         await expect(mockedWindow.locator('#btn-start-archive')).toBeDisabled();
     });
 });
+
+test.describe('Developer Sync tab', () => {
+    /** Select one property, open the sync tab and pick a folder. */
+    async function openSyncWithProperty(win) {
+        await setupMainInterface(win);
+        await win.locator('button.icon-btn[title="Select Properties"]').click();
+        await win.locator('#property-list .prop-item', { hasText: 'Mock Property One' }).locator('input').check();
+        await win.locator('#property-select-panel button.primary').click();
+        await win.locator('.tab-btn', { hasText: 'Developer Sync' }).click();
+        await win.locator('#tab-sync button', { hasText: 'Browse' }).click();
+        await expect(win.locator('#sync-folder-path')).toHaveValue('C:/mock-sync');
+    }
+
+    test('a status check lists each state, conflicts with their reason, and failed lists', async ({ mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await mockedWindow.locator('button', { hasText: 'Check Status' }).click();
+
+        const log = mockedWindow.locator('#sync-console');
+        await expect(log).toContainText('Files To Be Pushed (Modified) [1]');
+        await expect(log).toContainText('[~] sync/rule_components/RC_TRACK (Page View › Track)');
+        await expect(log).toContainText('Files To Be Pushed (Deleted Locally) [1]');
+        await expect(log).toContainText('Files To Be Pulled (New/Modified in Launch) [1]');
+        await expect(log).toContainText('Deleted in Launch (Download moves these to _deleted) [1]');
+        await expect(log).toContainText('[x] sync/rules/RL_OLD (Old Campaign)');
+        await expect(log).toContainText('[!] sync/data_elements/DE_CART (Cart): changed locally and in Launch');
+        await expect(log).toContainText("⚠ Couldn't list extensions: Request failed with status code 500");
+        await expect(log).not.toContainText('Everything is in sync');
+    });
+
+    test('a download reports folders set aside and local edits kept', async ({ mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await mockedWindow.locator('button', { hasText: 'Initialize' }).click();
+
+        const log = mockedWindow.locator('#sync-console');
+        await expect(log).toContainText('✅ Downloaded 120 items.');
+        await expect(log).toContainText('Removed 3 code files the items no longer have.');
+        await expect(log).toContainText('Moved to _deleted (deleted in Launch) [1]');
+        await expect(log).toContainText('[x] rules/RL_OLD (Old Campaign)');
+        await expect(log).toContainText('[~] data_elements/DE_CART (Cart)');
+        await expect(log).toContainText('All downloads complete.');
+    });
+});
