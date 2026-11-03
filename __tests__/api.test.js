@@ -1,6 +1,6 @@
 'use strict';
 
-const { listAll, latestSucceededBuild, latestSucceededBuilds } = require('../lib/reactor-core/api');
+const { listAll, latestSucceededBuild, latestSucceededBuilds, latestSucceededLibraryBuild } = require('../lib/reactor-core/api');
 
 // A stand-in for a Reactor list endpoint that behaves as observed: page[size] is
 // silently clamped to 100, meta.pagination.next_page is null on the last page,
@@ -150,5 +150,29 @@ describe('latestSucceededBuilds', () => {
         const result = await latestSucceededBuilds(api.get, 'ENabc', 2);
 
         expect(result.map(b => b.id)).toEqual(['BL3', 'BL2']);
+    });
+});
+
+describe('latestSucceededLibraryBuild', () => {
+    test('returns the newest succeeded build of a library, whatever order the list is in', async () => {
+        // A library's builds span its environments (dev, staging, production),
+        // so the newest succeeded one is its effective set as it stands.
+        const api = fakeReactor([
+            build('BL1', 'succeeded', '2026-10-30T01:00:00.000Z'),
+            build('BL3', 'succeeded', '2026-10-30T03:00:00.000Z'),
+            build('BL4', 'failed', '2026-10-30T04:00:00.000Z'),
+            build('BL2', 'succeeded', '2026-10-30T02:00:00.000Z')
+        ], { honoursFilters: false });
+
+        const result = await latestSucceededLibraryBuild(api.get, 'LB1');
+
+        expect(result.id).toBe('BL3');
+        expect(new URL(api.requests[0]).pathname).toBe('/libraries/LB1/builds');
+    });
+
+    test('returns null when the library has never built successfully', async () => {
+        const api = fakeReactor([build('BL1', 'pending', '2026-10-30T01:00:00.000Z')]);
+
+        expect(await latestSucceededLibraryBuild(api.get, 'LB1')).toBeNull();
     });
 });

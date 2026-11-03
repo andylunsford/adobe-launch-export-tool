@@ -217,7 +217,8 @@ async function performEnvironmentComparison() {
             envAId,
             envBId,
             mode,
-            useCache
+            useCache,
+            propertyId: document.getElementById('compare-prop-select').value
         });
 
         currentComparison = result;
@@ -251,10 +252,21 @@ function displayComparisonResults(result) {
     ];
 
     let hasDifferences = false;
+    // New revisions that change nothing (revising a rule revises all of its
+    // components) are counted, not listed as changes.
+    const revisedNotes = [];
 
     resourceTypes.forEach(type => {
         const typeData = result[type.key];
         if (!typeData) return;
+
+        const revisedCount = typeData.revised?.length || 0;
+        if (revisedCount > 0) {
+            const noun = type.label.toLowerCase();
+            revisedNotes.push(revisedCount === 1
+                ? `1 ${noun.replace(/s$/, '')} has a new revision with no changes.`
+                : `${revisedCount} ${noun} have a new revision with no changes.`);
+        }
 
         const sections = [
             { key: 'onlyInB', title: `New ${type.label} (Added to ${entityBName})`, class: 'diff-added' },
@@ -309,8 +321,15 @@ function displayComparisonResults(result) {
                         itemDiv.style.cursor = 'pointer';
                         
                         // For new items, show the entire attributes object formatted nicely
-                        const fullConfig = JSON.stringify(item.item.attributes, null, 2);
-                        itemDiv.onclick = () => showDiffModal(item.name, `--- New Item Configuration ---\n${fullConfig}`);
+                        let fullConfig = `--- New Item Configuration ---\n${JSON.stringify(item.item.attributes, null, 2)}`;
+                        // A new rule's components are what it does
+                        if (item.components?.length) {
+                            fullConfig += '\n\n--- Components ---';
+                            item.components.forEach(c => {
+                                fullConfig += `\n${c.name} (${c.componentType})\n${JSON.stringify(c.attributes, null, 2)}`;
+                            });
+                        }
+                        itemDiv.onclick = () => showDiffModal(item.name, fullConfig);
                     }
 
                     itemDiv.innerText = titleText;
@@ -325,6 +344,13 @@ function displayComparisonResults(result) {
     if (!hasDifferences) {
         container.innerHTML = `<p class="diff-identical" style="padding: 15px; background: var(--input-bg); border-radius: 6px; text-align: center;">✅ No differences found between ${entityAName} and ${entityBName}.</p>`;
     }
+
+    revisedNotes.forEach(text => {
+        const note = document.createElement('p');
+        note.style.cssText = 'font-size:12px; color:var(--text-muted); margin:10px 0 0;';
+        note.textContent = text;
+        container.appendChild(note);
+    });
 }
 
 // --- Download Comparison Notes ---
@@ -372,12 +398,16 @@ async function downloadComparisonNotes() {
                         }
                     } else if (section.key === 'onlyInB') {
                         // Include full settings for new items in a code block
-                        md += "  - *Full Configuration:*\n";
-                        md += "    ```json\n";
                         // Indent the JSON for better readability in Markdown
-                        const config = JSON.stringify(item.item.attributes, null, 2).split('\n').map(l => `    ${l}`).join('\n');
-                        md += `${config}\n`;
-                        md += "    ```\n";
+                        const jsonBlock = (value) => "    ```json\n"
+                            + JSON.stringify(value, null, 2).split('\n').map(l => `    ${l}`).join('\n')
+                            + "\n    ```\n";
+                        md += "  - *Full Configuration:*\n";
+                        md += jsonBlock(item.item.attributes);
+                        (item.components || []).forEach(c => {
+                            md += `  - *${c.name} (${c.componentType}):*\n`;
+                            md += jsonBlock(c.attributes);
+                        });
                     }
                 });
                 md += '\n';
@@ -412,20 +442,22 @@ function showDiffModal(name, diffText) {
     title.innerText = `Difference: ${name}`;
     diffContainer.innerHTML = ''; // Clear previous content
 
-    // Pre-process diff: replace \n with <br>, add color spans
-    const htmlDiff = diffText.split('\n').map(line => {
-        if (line.startsWith('+')) {
-            return `<span style="color: var(--success);">${line}</span>`;
-        } else if (line.startsWith('-')) {
-            return `<span style="color: var(--danger);">${line}</span>`;
-        } else if (line.startsWith('@@')) {
-            return `<span style="color: var(--warning);">${line}</span>`;
-        } else {
-            return line;
+    // Color diff lines. Lines are text, never markup: settings hold custom code.
+    diffText.split('\n').forEach((line, i) => {
+        if (i > 0) diffContainer.appendChild(document.createTextNode('\n'));
+        const color = line.startsWith('+') ? 'var(--success)'
+            : line.startsWith('-') ? 'var(--danger)'
+            : line.startsWith('@@') ? 'var(--warning)'
+            : null;
+        if (!color) {
+            diffContainer.appendChild(document.createTextNode(line));
+            return;
         }
-    }).join('<br>');
-    
-    diffContainer.innerHTML = htmlDiff;
+        const span = document.createElement('span');
+        span.style.color = color;
+        span.textContent = line;
+        diffContainer.appendChild(span);
+    });
     
     document.getElementById('diff-modal').classList.remove('hidden');
 }

@@ -148,6 +148,52 @@ test.describe('Environment Comparison tab', () => {
         await expect(info).not.toContainText('N/A');
     });
 
+    test('a comparison lists real changes and only counts revisions that changed nothing', async ({ electronApp, mockedWindow }) => {
+        await openCompareWithProperty(mockedWindow);
+        await mockedWindow.locator('#envA-select').selectOption('EN_PRD');
+        await mockedWindow.locator('#envB-select').selectOption('EN_DEV');
+        await mockedWindow.locator('button.primary[onclick="performEnvironmentComparison()"]').click();
+
+        const results = mockedWindow.locator('#comparison-content');
+        await expect(results).toContainText('Page View', { timeout: 10_000 });
+        await expect(results).toContainText('1 rule has a new revision with no changes');
+        await expect(results).not.toContainText('Click (Click to see changes)');
+
+        // The property decides whether component timeouts and delays count
+        const payload = await electronApp.evaluate(() => globalThis.__lastComparePayload);
+        expect(payload.propertyId).toBe(MOCK_DATA.properties[0].id);
+    });
+
+    /** Compare production with development and wait for the results. */
+    async function runComparison(win) {
+        await openCompareWithProperty(win);
+        await win.locator('#envA-select').selectOption('EN_PRD');
+        await win.locator('#envB-select').selectOption('EN_DEV');
+        await win.locator('button.primary[onclick="performEnvironmentComparison()"]').click();
+        await expect(win.locator('#comparison-content')).toContainText('Form Submit', { timeout: 10_000 });
+    }
+
+    test('a new rule shows its components, with custom code as text', async ({ mockedWindow }) => {
+        await runComparison(mockedWindow);
+        await mockedWindow.locator('#comparison-content .diff-item', { hasText: 'Form Submit' }).click();
+
+        const modal = mockedWindow.locator('#diff-content');
+        await expect(modal).toContainText('Submit (core::events::submit)');
+        await expect(modal).toContainText('Thank You Banner (core::actions::custom-code)');
+        await expect(modal).toContainText('<b>Thanks</b>');
+        await expect(modal.locator('img, b')).toHaveCount(0);
+        expect(await mockedWindow.evaluate(() => window.__injected)).toBeUndefined();
+    });
+
+    test('release notes list a new rule\'s components', async ({ electronApp, mockedWindow }) => {
+        mockedWindow.on('dialog', dialog => dialog.accept());
+        await runComparison(mockedWindow);
+        await mockedWindow.locator('button[onclick="downloadComparisonNotes()"]').click();
+
+        await expect.poll(() => electronApp.evaluate(() => globalThis.__lastSavedFile?.content))
+            .toContain('Thank You Banner (core::actions::custom-code)');
+    });
+
     test('library details show its state and last build', async ({ mockedWindow }) => {
         await openCompareWithProperty(mockedWindow);
         await mockedWindow.locator('#compare-mode-select').selectOption('libraries');

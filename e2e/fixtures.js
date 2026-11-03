@@ -48,6 +48,38 @@ const MOCK_DATA = {
         },
     ],
     envLibrary: { libraryId: 'LB_001', libraryName: 'Library 1.0', buildId: 'BL_001', buildDate: '2026-01-15T12:00:00Z' },
+    // What lib/reactor-core/compare-builds diffSets returns: one rule with a
+    // changed action, one rule re-revised with nothing changed, and one new
+    // rule whose custom code is markup.
+    comparison: {
+        rules: {
+            onlyInA: [], identical: [],
+            onlyInB: [{
+                id: 'RL_FSr1', name: 'Form Submit', revisionNumber: 1,
+                item: { id: 'RL_FSr1', type: 'rules', attributes: { name: 'Form Submit', enabled: true } },
+                components: [
+                    { name: 'Submit', componentType: 'core::events::submit', attributes: { settings: {} } },
+                    { name: 'Thank You Banner', componentType: 'core::actions::custom-code',
+                      attributes: { settings: { language: 'html', source: '<img src=x onerror="window.__injected=true"><b>Thanks</b>' } } }
+                ]
+            }],
+            modified: [{
+                id: 'RL_PVr2', name: 'Page View', oldName: 'Page View', newName: 'Page View',
+                revisionNumberA: 1, revisionNumberB: 2, attributeDiffs: [],
+                componentDiffs: [{
+                    type: 'modified', name: 'Track', componentType: 'core::actions::custom-code',
+                    attributeDiffs: [{ field: 'settings', oldValue: { source: 'run();' }, newValue: { source: 'track();' } }]
+                }]
+            }],
+            revised: [{
+                id: 'RL_CLr2', name: 'Click', oldName: 'Click', newName: 'Click',
+                revisionNumberA: 1, revisionNumberB: 2, attributeDiffs: [], componentDiffs: []
+            }]
+        },
+        data_elements: { onlyInA: [], onlyInB: [], modified: [], revised: [], identical: [] },
+        extensions: { onlyInA: [], onlyInB: [], modified: [], revised: [], identical: [] },
+        fromCache: false
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -64,7 +96,7 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             'get-saved-config', 'save-config-field',
             'adobe-login', 'get-companies', 'get-properties',
             'get-environments', 'get-libraries', 'get-environment-library',
-            'perform-environment-comparison',
+            'perform-environment-comparison', 'save-file',
             'get-cache-stats', 'clear-cache',
             'resume-archive-run',
         ];
@@ -84,10 +116,15 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
         ipcMain.handle('get-environments',        () => data.environments);
         ipcMain.handle('get-libraries',           () => data.libraries);
         ipcMain.handle('get-environment-library', () => data.envLibrary);
-        ipcMain.handle('perform-environment-comparison', () => ({
-            rulesA: [], rulesB: [], dataElementsA: [], dataElementsB: [],
-            extensionsA: [], extensionsB: [],
-        }));
+        // Keeps the last payload so a test can check what the renderer sent.
+        ipcMain.handle('perform-environment-comparison', (_event, payload) => {
+            globalThis.__lastComparePayload = payload;
+            return data.comparison;
+        });
+        ipcMain.handle('save-file', (_event, payload) => {
+            globalThis.__lastSavedFile = payload;
+            return true;
+        });
         ipcMain.handle('get-cache-stats', () => ({
             rules: 0, data_elements: 0, extensions: 0,
             rule_components: 0, environments: 0, libraries: 0,
