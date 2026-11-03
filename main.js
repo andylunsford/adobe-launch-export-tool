@@ -6,6 +6,7 @@ const https = require('https');
 const reactorCore = require('./lib/reactor-core');
 const { listAll, latestSucceededBuild, latestSucceededBuilds, latestSucceededLibraryBuild } = reactorCore.api;
 const { diffSets } = reactorCore.compareBuilds;
+const { listArchiveWork, archiveItem, markDeletions } = reactorCore.archive;
 const db = require('./lib/db');
 
 // --- TLS ---
@@ -812,11 +813,11 @@ async function rateLimitedGet(url, headers, sendUpdate) {
 }
 
 /**
- * Module-scoped fetchList — used by both perform-archive-run and runArchiveQueue.
- * Pages through listAll with the rate-limited GET, so a 429 pauses the archive.
+ * The archive's `get(url)` for lib/reactor-core/archive: the rate-limited GET,
+ * resolving to the response body, so a 429 pauses the archive.
  */
-async function archiveFetchList(url, headers, sendUpdate) {
-    return listAll((pageUrl) => rateLimitedGet(pageUrl, headers, sendUpdate).then(res => res.data), url);
+function archiveGet(headers, sendUpdate) {
+    return (url) => rateLimitedGet(url, headers, sendUpdate).then(res => res.data);
 }
 
 /**
@@ -826,55 +827,22 @@ async function archiveFetchList(url, headers, sendUpdate) {
  */
 async function runArchiveQueue({ workQueue, startIndex, processedItems, totalItems, targetDir, headers, sendUpdate }) {
     let processed = processedItems;
+    const get = archiveGet(headers, sendUpdate);
 
     for (let i = startIndex; i < workQueue.length; i += ARCHIVE_CHUNK_SIZE) {
         const chunk = workQueue.slice(i, i + ARCHIVE_CHUNK_SIZE);
 
         // Collect any RATE_LIMIT_EXHAUSTED thrown inside the chunk's items
         let rateLimitHit = null;
-        await Promise.all(chunk.map(async (job) => {
-            const { type, item } = job;
-            const itemId = item.id;
-            const safeName = sanitizeFolderName(item.attributes.name || item.attributes.display_name || 'unnamed');
-
-            const itemDir = path.join(targetDir, type, `${safeName}_${itemId}`);
-            if (!fs.existsSync(itemDir)) fs.mkdirSync(itemDir, { recursive: true });
-
+        await Promise.all(chunk.map(async ({ type, item }) => {
+            const folderName = sanitizeFolderName(item.attributes.name || item.attributes.display_name || 'unnamed');
             try {
-                const noRevisionTypes = ['builds', 'libraries', 'environments', 'rule_components'];
-
-                if (noRevisionTypes.includes(type)) {
-                    fs.writeFileSync(path.join(itemDir, `${type}_${itemId}.json`), JSON.stringify(item, null, 2));
-                } else {
-                    const revisionsUrl = `https://reactor.adobe.io/${type}/${itemId}/revisions`;
-                    const revisions = await archiveFetchList(revisionsUrl, headers, sendUpdate);
-
-                    revisions.forEach(rev => {
-                        const revPath = path.join(itemDir, `rev_${rev.id}.json`);
-                        if (!fs.existsSync(revPath)) {
-                            fs.writeFileSync(revPath, JSON.stringify(rev, null, 2));
-                        }
-                    });
-
-                    if (type === 'extensions') {
-                        try {
-                            const pkgUrl = `https://reactor.adobe.io/extensions/${itemId}/extension_package`;
-                            const pkgRes = await rateLimitedGet(pkgUrl, headers, sendUpdate);
-                            const pkg = pkgRes.data.data;
-                            if (pkg) {
-                                fs.writeFileSync(path.join(itemDir, `package_${pkg.id}.json`), JSON.stringify(pkg, null, 2));
-                            }
-                        } catch (pkgErr) {
-                            if (pkgErr.message === 'RATE_LIMIT_EXHAUSTED') throw pkgErr;
-                            console.error(`Failed to fetch package for extension ${itemId}:`, pkgErr.message);
-                        }
-                    }
-                }
+                await archiveItem({ type, item, folderName, targetDir, get });
             } catch (itemErr) {
                 if (itemErr.message === 'RATE_LIMIT_EXHAUSTED') {
                     rateLimitHit = itemErr;  // bubble up after all items settle
                 } else {
-                    console.error(`Failed to archive ${type} ${itemId}:`, itemErr.message);
+                    console.error(`Failed to archive ${type} ${item.id}:`, itemErr.message);
                 }
             }
         }));
@@ -908,78 +876,12 @@ ipcMain.handle('perform-archive-run', async (event, { propertyId, targetDir, typ
         // ----------------------------------------------------------------
         // Phase 1: Build work queue (list-fetching phase)
         // ----------------------------------------------------------------
-        const workQueue = [];
-
-        const queueType = async (type, endpoint) => {
-            if (types.includes(type)) {
-                sendUpdate(`Fetching ${type} list...`, 0);
-                try {
-                    const items = await archiveFetchList(
-                        `https://reactor.adobe.io/properties/${propertyId}/${endpoint}`,
-                        headers, sendUpdate
-                    );
-                    workQueue.push(...items.map(item => ({ type, item })));
-                } catch (err) {
-                    if (err.message === 'RATE_LIMIT_EXHAUSTED') throw err;
-                    console.error(`Failed to list ${type}:`, err.message);
-                }
-            }
-        };
-
+        const get = archiveGet(headers, sendUpdate);
+        let workQueue, liveIds;
         try {
-            await queueType('rules', 'rules');
-            await queueType('data_elements', 'data_elements');
-            await queueType('extensions', 'extensions');
-            await queueType('environments', 'environments');
-            await queueType('libraries', 'libraries');
-
-            // Builds (via Libraries)
-            if (types.includes('builds')) {
-                sendUpdate('Fetching Libraries for Build scan...', 0);
-                let libsForBuilds = workQueue.filter(i => i.type === 'libraries').map(i => i.item);
-                if (libsForBuilds.length === 0) {
-                    libsForBuilds = await archiveFetchList(
-                        `https://reactor.adobe.io/properties/${propertyId}/libraries`,
-                        headers, sendUpdate
-                    );
-                }
-                for (const lib of libsForBuilds) {
-                    try {
-                        const builds = await archiveFetchList(
-                            `https://reactor.adobe.io/libraries/${lib.id}/builds`,
-                            headers, sendUpdate
-                        );
-                        workQueue.push(...builds.map(b => ({ type: 'builds', item: b })));
-                    } catch (e) {
-                        if (e.message === 'RATE_LIMIT_EXHAUSTED') throw e;
-                        /* ignore — library may have no builds */
-                    }
-                }
-            }
-
-            // Rule Components (via Rules)
-            if (types.includes('rule_components')) {
-                sendUpdate('Fetching Rules to find Components...', 0);
-                let rulesForComps = workQueue.filter(i => i.type === 'rules').map(i => i.item);
-                if (rulesForComps.length === 0) {
-                    rulesForComps = await archiveFetchList(
-                        `https://reactor.adobe.io/properties/${propertyId}/rules`,
-                        headers, sendUpdate
-                    );
-                }
-                for (const r of rulesForComps) {
-                    try {
-                        const comps = await archiveFetchList(
-                            `https://reactor.adobe.io/rules/${r.id}/rule_components`,
-                            headers, sendUpdate
-                        );
-                        workQueue.push(...comps.map(c => ({ type: 'rule_components', item: c })));
-                    } catch (e) {
-                        if (e.message === 'RATE_LIMIT_EXHAUSTED') throw e;
-                        /* ignore */
-                    }
-                }
-            }
+            ({ workQueue, liveIds } = await listArchiveWork({
+                propertyId, types, get, onProgress: (msg) => sendUpdate(msg, 0)
+            }));
         } catch (listErr) {
             if (listErr.message === 'RATE_LIMIT_EXHAUSTED') {
                 throw new Error('Archive paused: rate limited twice during list setup. Please wait and try again.');
@@ -1012,6 +914,24 @@ ipcMain.handle('perform-archive-run', async (event, { propertyId, targetDir, typ
                 return { rateLimited: true };
             }
             throw queueErr;
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 3: Mark items Launch no longer lists. Only a run that listed
+        // and archived everything without a pause gets here, and only types
+        // listed completely are checked, so no live item is marked.
+        // ----------------------------------------------------------------
+        try {
+            let marked = 0;
+            for (const [type, ids] of Object.entries(liveIds)) {
+                sendUpdate(`Checking for deleted ${type}...`, 100);
+                marked += (await markDeletions({ targetDir, type, liveIds: ids, get })).marked.length;
+            }
+            if (marked > 0) sendUpdate(`Marked ${marked} deleted items with _deleted.json.`, 100);
+        } catch (e) {
+            sendUpdate(e.message === 'RATE_LIMIT_EXHAUSTED'
+                ? '⚠ Rate limited while checking for deleted items. The next run will finish the check.'
+                : `⚠ Check for deleted items failed: ${e.message}`, 100);
         }
 
         pendingArchive = null;
