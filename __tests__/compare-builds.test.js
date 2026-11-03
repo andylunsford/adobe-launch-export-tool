@@ -136,14 +136,31 @@ describe('diffSets: rules', () => {
         expect(loadComponents).not.toHaveBeenCalled();
     });
 
-    test('rules on one side only are not compared, so their components are not fetched', async () => {
+    test('an added rule lists its components, events first, without bookkeeping', async () => {
+        const loadComponents = componentLoader({
+            RL2r1: [
+                component('RC2', 1, { name: 'Send Beacon', order: 0 }),
+                component('RC1', 1, { name: 'Page Bottom', delegate_descriptor_id: 'core::events::page-bottom', settings: '{}' })
+            ]
+        });
+
+        const result = await diffSets(sets(), sets({ rules: [rule('RL2', 1)] }), { loadComponents });
+
+        expect(result.rules.onlyInB[0].components).toEqual([
+            { name: 'Page Bottom', componentType: 'core::events::page-bottom',
+              attributes: { settings: {}, timeout: 2000, delay_next: true } },
+            { name: 'Send Beacon', componentType: 'core::actions::custom-code',
+              attributes: { settings: { language: 'javascript', source: 'run();' }, timeout: 2000, delay_next: true } }
+        ]);
+    });
+
+    test('a removed rule is listed by name, without fetching its components', async () => {
         const loadComponents = componentLoader({});
 
         const result = await diffSets(sets({ rules: [rule('RL1', 1)] }), sets({ rules: [rule('RL2', 1)] }), { loadComponents });
 
         expect(result.rules.onlyInA.map(x => x.id)).toEqual(['RL1r1']);
-        expect(result.rules.onlyInB.map(x => x.id)).toEqual(['RL2r1']);
-        expect(loadComponents).not.toHaveBeenCalled();
+        expect(loadComponents.mock.calls.map(([r]) => r.id)).toEqual(['RL2r1']);
     });
 
     test('a rule revised with no change is revised, though every component got a new revision', async () => {
