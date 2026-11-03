@@ -25,49 +25,125 @@ async function scanForArchive() {
         return alert('Please select one or more properties to perform a scan/archive.');
     }
 
-    const types = [];
-    if (document.getElementById('chk-scan-rules').checked) types.push('rules');
-    if (document.getElementById('chk-scan-de').checked) types.push('data_elements');
-    if (document.getElementById('chk-scan-ext').checked) types.push('extensions');
-    if (document.getElementById('chk-scan-rc').checked) types.push('rule_components');
-    if (document.getElementById('chk-scan-env').checked) types.push('environments');
-    if (document.getElementById('chk-scan-lib').checked) types.push('libraries');
-
+    const types = SCAN_TYPES.filter(t => document.getElementById(t.checkbox).checked);
     if (types.length === 0) return alert('Select at least one type to scan.');
+    const typeKeys = types.map(t => t.key);
 
     ui.logArchive(`Scanning ${properties.length} properties for items...`, 0);
     document.getElementById('btn-start-archive').disabled = true;
+    SCAN_TYPES.forEach(t => { document.getElementById(t.badge).textContent = '-'; });
 
+    // Every property starts as a pending row and fills in as its scan returns.
     window.lastScanResult = {};
-    let totalItemsFound = 0;
+    const rows = properties.map(property => ({ property, counts: null, error: null }));
+    renderScanTable(types, rows);
 
-    try {
-        for (const property of properties) {
-            ui.logArchive(`\n--- [${property.name}] Starting Scan ---`);
-
-            const counts = await window.api.performArchiveScan({
+    let scanned = 0;
+    for (const row of rows) {
+        const { property } = row;
+        ui.logArchive(`\n--- [${property.name}] Starting Scan ---`);
+        try {
+            row.counts = await window.api.performArchiveScan({
                 propertyId: property.id,
-                types,
+                types: typeKeys,
                 token: ui.getGlobalToken(),
                 creds: ui.getCurrentCreds()
             });
-
-            ui.logArchive(`[${property.name}] Scan Complete. Found ${counts.total} items total:`);
-            ui.logArchive(`[${property.name}] - Rules: ${counts.rules || 0}`);
-            ui.logArchive(`[${property.name}] - Data Elements: ${counts.data_elements || 0}`);
-            ui.logArchive(`[${property.name}] - Extensions: ${counts.extensions || 0}`);
-
-            totalItemsFound += counts.total;
-            window.lastScanResult[property.id] = { counts, types, name: property.name };
+            window.lastScanResult[property.id] = { counts: row.counts, types: typeKeys, name: property.name };
+            ui.logArchive(`[${property.name}] Scan Complete. Found ${row.counts.total} items total:`);
+            types.forEach(t => ui.logArchive(`[${property.name}] - ${t.label}: ${formatCount(row.counts[t.key])}`));
+        } catch (e) {
+            // One property failing shouldn't stop the rest; it is skipped on archive.
+            // Drop Electron's "Error invoking remote method '…': Error:" wrapper.
+            row.error = e.message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+            ui.logArchive(`[${property.name}] ❌ Scan Failed: ${e.message}`);
         }
-
-        ui.logArchive(`\n✅ All Scans Complete! Total items found across all properties: ${totalItemsFound}`, 100);
-        document.getElementById('btn-start-archive').disabled = false;
-
-    } catch (e) {
-        ui.logArchive('❌ Scan Failed: ' + e.message);
-        document.getElementById('btn-start-archive').disabled = false;
+        scanned++;
+        ui.logArchive(`[${property.name}] (${scanned}/${rows.length} scanned)`, Math.round((scanned / rows.length) * 100));
+        renderScanTable(types, rows);
     }
+
+    const succeeded = rows.filter(r => r.counts);
+    const grandTotal = succeeded.reduce((sum, r) => sum + r.counts.total, 0);
+    types.forEach(t => {
+        document.getElementById(t.badge).textContent = t.countable
+            ? sumType(succeeded, t.key).toLocaleString()
+            : 'via rules';
+    });
+
+    const failed = rows.length - succeeded.length;
+    ui.logArchive(failed === 0
+        ? `\n✅ All Scans Complete! Total items found across all properties: ${grandTotal}`
+        : `\n⚠️ Scans finished with ${failed} failure(s). Total items found across ${succeeded.length} properties: ${grandTotal}`, 100);
+    document.getElementById('btn-start-archive').disabled = succeeded.length === 0;
+}
+
+// --- Scan Result Helpers ---
+// Rule components can't be listed in bulk (the API returns 403), so they are
+// archived through their rules and have no count of their own.
+const SCAN_TYPES = [
+    { key: 'rules', label: 'Rules', checkbox: 'chk-scan-rules', badge: 'count-rules', countable: true },
+    { key: 'data_elements', label: 'Data Elements', checkbox: 'chk-scan-de', badge: 'count-de', countable: true },
+    { key: 'extensions', label: 'Extensions', checkbox: 'chk-scan-ext', badge: 'count-ext', countable: true },
+    { key: 'rule_components', label: 'Rule Components', checkbox: 'chk-scan-rc', badge: 'count-rc', countable: false },
+    { key: 'environments', label: 'Environments', checkbox: 'chk-scan-env', badge: 'count-env', countable: true },
+    { key: 'libraries', label: 'Libraries', checkbox: 'chk-scan-lib', badge: 'count-lib', countable: true }
+];
+
+function formatCount(value) {
+    return typeof value === 'number' ? value.toLocaleString() : 'via rules';
+}
+
+function sumType(rows, key) {
+    return rows.reduce((sum, r) => sum + (typeof r.counts[key] === 'number' ? r.counts[key] : 0), 0);
+}
+
+function cell(tag, text, className) {
+    const el = document.createElement(tag);
+    el.textContent = text;
+    if (className) el.className = className;
+    return el;
+}
+
+// One row per property, one column per scanned type, a total column and a
+// totals footer. Pending rows show "…"; failed rows show their error.
+function renderScanTable(types, rows) {
+    const table = document.getElementById('archive-scan-table');
+    table.innerHTML = '';
+
+    const head = table.createTHead().insertRow();
+    head.append(cell('th', 'Property'), ...types.map(t => cell('th', t.label)), cell('th', 'Total'));
+
+    const body = table.createTBody();
+    rows.forEach(({ property, counts, error }) => {
+        const tr = body.insertRow();
+        tr.dataset.propertyId = property.id;
+        tr.append(cell('td', property.name));
+        if (error) {
+            const err = cell('td', `Scan failed: ${error}`, 'scan-error');
+            err.colSpan = types.length + 1;
+            tr.append(err);
+        } else if (!counts) {
+            tr.append(...[...types, null].map(() => cell('td', '…', 'scan-pending')));
+        } else {
+            tr.append(
+                ...types.map(t => cell('td', formatCount(counts[t.key]), t.countable ? '' : 'scan-na')),
+                cell('td', counts.total.toLocaleString())
+            );
+        }
+    });
+
+    const done = rows.filter(r => r.counts);
+    if (rows.length > 1 && done.length > 0) {
+        const foot = table.createTFoot().insertRow();
+        foot.append(
+            cell('td', 'All properties'),
+            ...types.map(t => cell('td', t.countable ? sumType(done, t.key).toLocaleString() : '—', t.countable ? '' : 'scan-na')),
+            cell('td', done.reduce((sum, r) => sum + r.counts.total, 0).toLocaleString())
+        );
+    }
+
+    document.getElementById('archive-scan-results').classList.remove('hidden');
 }
 
 // --- Start Archive Run ---

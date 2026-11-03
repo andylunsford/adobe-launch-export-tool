@@ -24,12 +24,17 @@ function populateComparisonProperties() {
         return;
     }
     
-    selectedProperties.forEach(prop => {
-        const opt = document.createElement('option');
-        opt.value = prop.id;
-        opt.innerText = prop.name;
-        opt.dataset.name = prop.name;
-        select.appendChild(opt);
+    ui.groupByPlatform(selectedProperties, prop => prop.platform).forEach(group => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = group.label;
+        group.items.forEach(prop => {
+            const opt = document.createElement('option');
+            opt.value = prop.id;
+            opt.innerText = prop.name;
+            opt.dataset.name = prop.name;
+            optgroup.appendChild(opt);
+        });
+        select.appendChild(optgroup);
     });
 
     // Keep the property already being compared, so a refresh doesn't reset it

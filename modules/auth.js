@@ -108,18 +108,39 @@ async function loadProperties(companyId) {
 
         ui.setAllLoadedProperties(properties); // Store properties globally
 
-        // Populate Global Property List
+        // Populate Global Property List, grouped under a heading per platform
         const list = document.getElementById('property-list');
         list.innerHTML = '';
-        properties.forEach(prop => {
-            const label = document.createElement('label');
-            label.className = 'prop-item';
-            label.innerHTML = `
-                <input type="checkbox" value="${prop.id}" data-name="${prop.attributes.name}" class="prop-check"> 
-                <span class="prop-name" title="${prop.attributes.name}">${prop.attributes.name}</span>
-            `;
-            list.appendChild(label);
+        ui.groupByPlatform(properties, prop => prop.attributes.platform).forEach(group => {
+            const heading = document.createElement('div');
+            heading.className = 'prop-group-heading';
+            heading.textContent = `${group.label} (${group.items.length})`;
+            list.appendChild(heading);
+
+            group.items.forEach(prop => {
+                const name = prop.attributes.name;
+                const label = document.createElement('label');
+                label.className = 'prop-item';
+
+                const check = document.createElement('input');
+                check.type = 'checkbox';
+                check.className = 'prop-check';
+                check.value = prop.id;
+                check.dataset.name = name;
+                check.dataset.platform = prop.attributes.platform ?? '';
+
+                const span = document.createElement('span');
+                span.className = 'prop-name';
+                span.title = name;
+                span.textContent = name;
+
+                label.append(check, span);
+                list.appendChild(label);
+            });
         });
+
+        loadedCompanyId = companyId;
+        await restorePropertySelection(companyId);
 
     } catch (e) {
         alert("Error loading properties: " + e.message);
@@ -127,6 +148,53 @@ async function loadProperties(companyId) {
         ui.hideLoading();
     }
 }
+
+// --- Persisted Property Selection ---
+// Selections are saved per company under `selected_properties`
+// ({ [companyId]: [propertyId, ...] }), so switching company neither loses
+// nor leaks another company's picks.
+let loadedCompanyId = null;
+
+async function restorePropertySelection(companyId) {
+    try {
+        const config = await window.api.getSavedConfig();
+        const saved = new Set(config.selected_properties?.[companyId] ?? []);
+        const checks = document.querySelectorAll('.prop-check');
+        checks.forEach(cb => { cb.checked = saved.has(cb.value); });
+        syncSelectAllToggle();
+    } catch (e) {
+        console.error('Could not restore property selection:', e);
+    }
+    // Let listeners (e.g. the Compare tab dropdown) pick up the restored state.
+    document.getElementById('property-list').dispatchEvent(new Event('change'));
+}
+
+async function savePropertySelection() {
+    if (!loadedCompanyId) return;
+    try {
+        const config = await window.api.getSavedConfig();
+        const all = { ...(config.selected_properties ?? {}) };
+        all[loadedCompanyId] = ui.getSelectedProperties().map(p => p.id);
+        await window.api.saveConfigField({ key: 'selected_properties', value: all });
+    } catch (e) {
+        console.error('Could not save property selection:', e);
+    }
+}
+
+// Keep the Select All box checked only when every property is.
+function syncSelectAllToggle() {
+    const checks = document.querySelectorAll('.prop-check');
+    const toggle = document.getElementById('select-all-toggle');
+    if (toggle) toggle.checked = checks.length > 0 && Array.from(checks).every(cb => cb.checked);
+}
+
+document.getElementById('property-list').addEventListener('change', (e) => {
+    // Ignore the synthetic event fired after a restore; nothing changed.
+    if (!e.isTrusted) return;
+    syncSelectAllToggle();
+    savePropertySelection();
+});
+document.getElementById('select-all-toggle').addEventListener('change', savePropertySelection);
 
 // --- TLS Opt-Out ---
 // Disabling certificate verification is a real downgrade, so the checkbox state

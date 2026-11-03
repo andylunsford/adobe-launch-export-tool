@@ -216,6 +216,40 @@ test.describe('History Archive tab', () => {
         }
     });
 
+    test('a scan lists counts per property, with totals and failures', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('button.icon-btn[title="Select Properties"]').click();
+        await expect(mockedWindow.locator('#property-list .prop-item').first()).toBeVisible({ timeout: 10_000 });
+        await mockedWindow.locator('#select-all-toggle').check();
+        await mockedWindow.locator('#property-select-panel button.primary').click();
+
+        await mockedWindow.locator('.tab-btn', { hasText: 'History Archive' }).click();
+        await mockedWindow.locator('button', { hasText: 'Scan Property' }).click();
+
+        const table = mockedWindow.locator('#archive-scan-table');
+        await expect(table.locator('thead th')).toHaveText([
+            'Property', 'Rules', 'Data Elements', 'Extensions', 'Rule Components', 'Environments', 'Libraries', 'Total'
+        ]);
+        await expect(table.locator('tr[data-property-id="PR_MOCK_001"] td')).toHaveText([
+            'Mock Property One', '12', '30', '4', 'via rules', '3', '1,500', '1,549'
+        ]);
+        await expect(table.locator('tr[data-property-id="PR_MOCK_002"] td')).toHaveText([
+            'Mock Property Two', '5', '8', '2', 'via rules', '3', '20', '38'
+        ]);
+        await expect(table.locator('tr[data-property-id="PR_MOCK_003"] td').nth(1)).toHaveText('Scan failed: Request failed with status code 403');
+        await expect(table.locator('tfoot td')).toHaveText([
+            'All properties', '17', '38', '6', '—', '6', '1,520', '1,587'
+        ]);
+
+        // The badges beside each type show the totals too
+        await expect(mockedWindow.locator('#count-rules')).toHaveText('17');
+        await expect(mockedWindow.locator('#count-lib')).toHaveText('1,520');
+        await expect(mockedWindow.locator('#count-rc')).toHaveText('via rules');
+
+        // The properties that scanned can still be archived
+        await expect(mockedWindow.locator('#btn-start-archive')).toBeEnabled();
+    });
+
     test('Start Archive button is initially disabled', async ({ mockedWindow }) => {
         await setupMainInterface(mockedWindow);
         await mockedWindow.locator('.tab-btn', { hasText: 'History Archive' }).click();

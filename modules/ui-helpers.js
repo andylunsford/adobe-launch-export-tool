@@ -65,12 +65,34 @@ function initTheme() {
     document.documentElement.setAttribute('data-theme', savedTheme);
 }
 
+// --- Property Platform Groups ---
+// Reactor tags each property with a platform; Event Forwarding properties are
+// "edge". Listed in display order. Anything unrecognised falls into "Other".
+const PLATFORM_GROUPS = [
+    { platform: 'edge', label: 'Event Forwarding (Server Side)' },
+    { platform: 'web', label: 'Web' },
+    { platform: 'mobile', label: 'Mobile (App)' }
+];
+
+// Buckets items by platform, returning only non-empty groups in display order.
+// `getPlatform` reads the platform off each item.
+function groupByPlatform(items, getPlatform) {
+    const known = PLATFORM_GROUPS.map(g => ({ ...g, items: [] }));
+    const other = { platform: 'other', label: 'Other', items: [] };
+    items.forEach(item => {
+        const group = known.find(g => g.platform === getPlatform(item)) || other;
+        group.items.push(item);
+    });
+    return [...known, other].filter(g => g.items.length > 0);
+}
+
 // --- Get Selected Properties ---
 function getSelectedProperties() {
     const checks = document.querySelectorAll('.prop-check:checked');
     return Array.from(checks).map(cb => ({
         id: cb.value,
-        name: cb.dataset.name // Assuming property name is stored in data-name
+        name: cb.dataset.name,
+        platform: cb.dataset.platform
     }));
 }
 
@@ -117,6 +139,7 @@ export {
     hideLoading,
     switchTab,
     toggleSelectAll,
+    groupByPlatform,
     initTheme,
     logArchive,
     logSync,

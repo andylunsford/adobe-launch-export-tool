@@ -27,10 +27,15 @@ const MOCK_DATA = {
         { id: 'CO_MOCK_001', attributes: { name: 'Mock Company Alpha' } },
         { id: 'CO_MOCK_002', attributes: { name: 'Mock Company Beta' } },
     ],
+    // Archive scan counts as main.js returns them, keyed by property.
+    archiveScan: {
+        PR_MOCK_001: { rules: 12, data_elements: 30, extensions: 4, rule_components: 'N/A (Scanned via Rules)', environments: 3, libraries: 1500, total: 1549 },
+        PR_MOCK_002: { rules: 5, data_elements: 8, extensions: 2, rule_components: 'N/A (Scanned via Rules)', environments: 3, libraries: 20, total: 38 },
+    },
     properties: [
         { id: 'PR_MOCK_001', attributes: { name: 'Mock Property One', platform: 'web' } },
-        { id: 'PR_MOCK_002', attributes: { name: 'Mock Property Two', platform: 'web' } },
-        { id: 'PR_MOCK_003', attributes: { name: 'Mock Property Three', platform: 'web' } },
+        { id: 'PR_MOCK_002', attributes: { name: 'Mock Property Two', platform: 'edge' } },
+        { id: 'PR_MOCK_003', attributes: { name: 'Mock Property Three', platform: 'mobile' } },
     ],
     environments: [
         { id: 'EN_DEV', type: 'environments', attributes: { name: 'Development', stage: 'development', status: 'succeeded' } },
@@ -97,13 +102,19 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             'adobe-login', 'get-companies', 'get-properties',
             'get-environments', 'get-libraries', 'get-environment-library',
             'perform-environment-comparison', 'save-file',
-            'get-cache-stats', 'clear-cache',
+            'get-cache-stats', 'clear-cache', 'perform-archive-scan',
             'resume-archive-run',
         ];
         channels.forEach(ch => { try { ipcMain.removeHandler(ch); } catch (_) {} });
 
-        ipcMain.handle('get-saved-config',  () => ({}));
-        ipcMain.handle('save-config-field', () => true);
+        // In-memory config, so a test can save a field and read it back.
+        const savedConfig = {};
+        globalThis.__savedConfig = savedConfig;
+        ipcMain.handle('get-saved-config',  () => JSON.parse(JSON.stringify(savedConfig)));
+        ipcMain.handle('save-config-field', (_event, { key, value }) => {
+            savedConfig[key] = value;
+            return true;
+        });
 
         ipcMain.handle('adobe-login', () =>
             outcome === 'success'
@@ -131,6 +142,13 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             oldest_cached_at: null
         }));
         ipcMain.handle('clear-cache', () => ({ success: true }));
+        // Counts differ per property; PR_MOCK_003 fails, to show one error
+        // doesn't stop the rest of the scan.
+        ipcMain.handle('perform-archive-scan', (_event, { propertyId }) => {
+            const scan = data.archiveScan[propertyId];
+            if (!scan) throw new Error('Request failed with status code 403');
+            return scan;
+        });
         ipcMain.handle('resume-archive-run', () => ({ success: true }));
     }, { outcome: loginOutcome, data: MOCK_DATA });
 }

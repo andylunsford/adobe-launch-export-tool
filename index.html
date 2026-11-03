@@ -14,8 +14,7 @@
     <div class="header-row">
         <div>
             <h1 style="font-family: 'Poppins'; margin: 0;">Nuclear</h1>
-            <div style="font-size: 13px; color: var(--text-muted);">A community maintained tool for managing
-                your Data Collection Tags Properties via the Reactor API</div>
+            <div style="font-size: 13px; color: var(--text-muted);">Tool suite for managing Tags &amp; Event Forwarding properties via the Reactor API</div>
         </div>
         <div class="icon-group">
             <button class="icon-btn" onclick="togglePanel('company-panel')" title="Select Company">
@@ -26,8 +25,14 @@
             </button>
             <button class="icon-btn" onclick="togglePanel('property-select-panel')" title="Select Properties">
                 <svg viewBox="0 0 24 24">
-                    <path
-                        d="M9.19 6.35c-2.04 2.29-3.44 5.58-3.57 5.89L2 10.69l4.05-4.05c.47-.47 1.15-.68 1.81-.55l1.33.26zM20.3 5.7c-.57-.57-1.4-.73-2.12-.49l-1.39.46c-.63.21-1.33.04-1.8-.43l-4.05-4.05-1.54 3.61c-.32.13-3.6 1.53-5.89 3.57 2.48 2.48 3.96 6.54 3.96 6.54l1.83 1.83 2.55-6.55c.16.03.32.05.48.05 1.1 0 2.2-.42 3.03-1.25.84-.84 1.25-1.94 1.25-3.03 0-.16-.02-.32-.05-.48l6.55-2.55-1.84-1.83s-4.06-1.48-6.54-3.96zM13 14l-2.55 6.55L14 22l4.05-4.05c.47-.47.64-1.15.43-1.8l-.46-1.39c-.24-.71-.08-1.55.49-2.12l1.83-1.84-6.55 2.55c.03.16.05.32.05.48 0 1.1-.42 2.2-1.25 3.03-.83.84-1.93 1.26-3.03 1.26-.16 0-.32-.02-.48-.05z" />
+                    <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                        <ellipse cx="10" cy="5.5" rx="7" ry="2.5" />
+                        <path d="M3 5.5v12c0 1.4 3.1 2.5 7 2.5.6 0 1.2 0 1.8-.1" />
+                        <path d="M3 11.5c0 1.4 3.1 2.5 7 2.5.6 0 1.2 0 1.8-.1" />
+                        <path d="M17 5.5V10" />
+                        <path d="M14.5 12.5h4l3 3-4 4-3-3z" />
+                    </g>
+                    <circle cx="16.6" cy="14.6" r="0.9" />
                 </svg>
             </button>
             <button class="icon-btn" onclick="togglePanel('creds-panel')" title="Manage Credentials">
@@ -225,6 +230,13 @@
                     <button class="primary" style="background:#f39c12;" onclick="scanForArchive()">🔍 Scan Property</button>
                     <button class="primary" id="btn-start-archive" disabled onclick="startArchive()">📦 Start Archive</button>
                     <button id="btn-resume-archive" class="primary" onclick="resumeArchive()" style="display:none;">Resume Archive</button>
+                </div>
+
+                <div id="archive-scan-results" class="scan-results hidden">
+                    <h4>Scan Results</h4>
+                    <div class="scan-table-wrap">
+                        <table id="archive-scan-table" class="scan-table"></table>
+                    </div>
                 </div>
             </div>
 
