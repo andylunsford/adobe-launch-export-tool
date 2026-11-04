@@ -1,145 +1,90 @@
 'use strict';
 
 const compare = require('../lib/reactor-core/diff/compare');
+const { fingerprint } = require('../lib/reactor-core/diff/normalize');
 
-function makeResource(id, attributes) {
-    return { id, attributes };
+function rule(attributes = {}) {
+    return {
+        id: 'RL00000000000000000000000000000001',
+        type: 'rules',
+        attributes: { name: 'Rule', enabled: true, published: false, updated_at: '2026-11-01T00:00:00.000Z', ...attributes }
+    };
 }
 
-// ─── Existence checks ─────────────────────────────────────────────────────────
+// The base is what the download recorded: the item's fingerprint then.
+const downloaded = rule();
+const base = { hash: fingerprint(downloaded) };
 
-describe('compare – existence checks', () => {
-    test('local only → added', () => {
-        const local = makeResource('RL1', { name: 'My Rule', updated_at: '2024-01-01T00:00:00.000Z' });
-        expect(compare(local, null)).toEqual({ result: 'added' });
+describe('compare – against the download record', () => {
+    test('nothing changed → unchanged', () => {
+        expect(compare(rule(), rule(), base).result).toBe('unchanged');
     });
 
-    test('remote only → behind', () => {
-        const remote = makeResource('RL1', { name: 'My Rule', updated_at: '2024-01-01T00:00:00.000Z' });
-        expect(compare(null, remote)).toEqual({ result: 'behind' });
+    test('only bookkeeping changed in Launch (a library publish) → unchanged', () => {
+        const remote = rule({ published: true, updated_at: '2026-11-02T00:00:00.000Z' });
+        expect(compare(rule(), remote, base).result).toBe('unchanged');
     });
 
-    test('both null → unchanged (neither side has attributes; was a crash bug before fix)', () => {
-        // Before fix: fell through both guards and crashed on `local.attributes` (TypeError).
-        // After fix: returns 'unchanged' since there is nothing to diff.
-        expect(compare(null, null)).toEqual({ result: 'unchanged' });
-    });
-});
-
-// ─── Identical resources ──────────────────────────────────────────────────────
-
-describe('compare – identical resources', () => {
-    test('same attributes → unchanged', () => {
-        const attrs = { name: 'Rule A', enabled: true, updated_at: '2024-06-01T00:00:00.000Z' };
-        const local = makeResource('RL1', { ...attrs });
-        const remote = makeResource('RL1', { ...attrs });
-        expect(compare(local, remote)).toEqual({ result: 'unchanged' });
-    });
-
-    test('settings attribute: same JSON (different whitespace) → unchanged', () => {
-        const localSettings = JSON.stringify({ delay: 100, event: 'click' });
-        const remoteSettings = JSON.stringify({ delay: 100, event: 'click' });
-        const ts = '2024-06-01T00:00:00.000Z';
-        const local = makeResource('RL2', { settings: localSettings, updated_at: ts });
-        const remote = makeResource('RL2', { settings: remoteSettings, updated_at: ts });
-        expect(compare(local, remote)).toEqual({ result: 'unchanged' });
-    });
-});
-
-// ─── Modified (local is newer or same date) ───────────────────────────────────
-
-describe('compare – modified', () => {
-    test('name differs, local date same as remote → modified', () => {
-        const ts = '2024-06-01T00:00:00.000Z';
-        const local = makeResource('RL3', { name: 'New Name', updated_at: ts });
-        const remote = makeResource('RL3', { name: 'Old Name', updated_at: ts });
-        const result = compare(local, remote);
+    test('changed locally only → modified (push)', () => {
+        const result = compare(rule({ name: 'Renamed' }), rule(), base);
         expect(result.result).toBe('modified');
-        expect(result.details.attributes).toHaveProperty('name');
+        expect(result.details.attributes.name).toEqual({ local: 'Renamed', remote: 'Rule' });
     });
 
-    test('name differs, local date is newer → modified', () => {
-        const local = makeResource('RL4', { name: 'Updated', updated_at: '2024-07-01T00:00:00.000Z' });
-        const remote = makeResource('RL4', { name: 'Original', updated_at: '2024-06-01T00:00:00.000Z' });
-        const result = compare(local, remote);
-        expect(result.result).toBe('modified');
+    test('changed in Launch only → behind (pull)', () => {
+        const remote = rule({ enabled: false, updated_at: '2026-11-02T00:00:00.000Z' });
+        expect(compare(rule(), remote, base).result).toBe('behind');
     });
 
-    test('settings differ and local is newer → modified', () => {
-        const local = makeResource('RL5', {
-            settings: JSON.stringify({ key: 'new' }),
-            updated_at: '2024-07-01T00:00:00.000Z'
-        });
-        const remote = makeResource('RL5', {
-            settings: JSON.stringify({ key: 'old' }),
-            updated_at: '2024-06-01T00:00:00.000Z'
-        });
-        const result = compare(local, remote);
-        expect(result.result).toBe('modified');
-    });
-});
-
-// ─── Behind (remote is newer) ─────────────────────────────────────────────────
-
-describe('compare – behind', () => {
-    test('attribute differs and remote is strictly newer → behind', () => {
-        const local = makeResource('RL6', { name: 'Local', updated_at: '2024-05-01T00:00:00.000Z' });
-        const remote = makeResource('RL6', { name: 'Remote Updated', updated_at: '2024-09-01T00:00:00.000Z' });
-        const result = compare(local, remote);
-        expect(result.result).toBe('behind');
+    test('changed locally and in Launch → conflict, whatever the dates say', () => {
+        const local = rule({ name: 'Mine' });
+        const remote = rule({ name: 'Theirs', updated_at: '2026-11-02T00:00:00.000Z' });
+        const result = compare(local, remote, base);
+        expect(result.result).toBe('conflict');
+        expect(result.details.reason).toMatch(/locally and in Launch/);
     });
 
-    test('settings differ and remote is newer → behind', () => {
-        const local = makeResource('RL7', {
-            settings: JSON.stringify({ key: 'old' }),
-            updated_at: '2024-04-01T00:00:00.000Z'
-        });
-        const remote = makeResource('RL7', {
-            settings: JSON.stringify({ key: 'new' }),
-            updated_at: '2024-08-01T00:00:00.000Z'
-        });
-        const result = compare(local, remote);
-        expect(result.result).toBe('behind');
+    test('the same change made on both sides → unchanged', () => {
+        expect(compare(rule({ name: 'Same' }), rule({ name: 'Same' }), base).result).toBe('unchanged');
+    });
+
+    test('gone from Launch, unchanged locally → deletedInLaunch', () => {
+        expect(compare(rule(), null, base).result).toBe('deletedInLaunch');
+    });
+
+    test('gone from Launch, changed locally → conflict', () => {
+        const result = compare(rule({ name: 'Mine' }), null, base);
+        expect(result.result).toBe('conflict');
+        expect(result.details.reason).toMatch(/deleted in Launch/);
+    });
+
+    test('removed locally, unchanged in Launch → deleted (push as a delete)', () => {
+        expect(compare(null, rule(), base).result).toBe('deleted');
+    });
+
+    test('removed locally, changed in Launch → conflict', () => {
+        const result = compare(null, rule({ name: 'Theirs' }), base);
+        expect(result.result).toBe('conflict');
+        expect(result.details.reason).toMatch(/deleted locally/);
     });
 });
 
-// ─── Settings special handling ────────────────────────────────────────────────
-
-describe('compare – settings attribute', () => {
-    test('settings with different key order but same content → unchanged', () => {
-        const ts = '2024-01-01T00:00:00.000Z';
-        const local = makeResource('RL8', {
-            settings: JSON.stringify({ b: 2, a: 1 }),
-            updated_at: ts
-        });
-        const remote = makeResource('RL8', {
-            settings: JSON.stringify({ a: 1, b: 2 }),
-            updated_at: ts
-        });
-        // JSON.parse then JSON.stringify both → same canonical string if same keys/values
-        // Note: key order in JSON.stringify output IS order-dependent, but the
-        // compare function parses both before re-stringifying, normalising them.
-        // The objects are equal in value, so after JSON.parse both give {b:2,a:1}
-        // and {a:1,b:2} – which stringify differently. This is a known limitation;
-        // document actual behaviour.
-        const result = compare(local, remote);
-        // Both are valid results depending on stringify order; just ensure no throw.
-        expect(['unchanged', 'modified', 'behind']).toContain(result.result);
+describe('compare – with no download record', () => {
+    test('local only → added (new locally)', () => {
+        expect(compare(rule(), null, null).result).toBe('added');
     });
 
-    test('settings malformed JSON falls back to string comparison (equal) → unchanged', () => {
-        const ts = '2024-01-01T00:00:00.000Z';
-        const bad = 'not-valid-json';
-        const local = makeResource('RL9', { settings: bad, updated_at: ts });
-        const remote = makeResource('RL9', { settings: bad, updated_at: ts });
-        expect(compare(local, remote)).toEqual({ result: 'unchanged' });
+    test('remote only → behind (new in Launch)', () => {
+        expect(compare(null, rule(), null).result).toBe('behind');
     });
 
-    test('settings malformed JSON, strings differ → not unchanged', () => {
-        const ts = '2024-01-01T00:00:00.000Z';
-        const local = makeResource('RL10', { settings: 'abc', updated_at: ts });
-        const remote = makeResource('RL10', { settings: 'xyz', updated_at: ts });
-        const result = compare(local, remote);
-        expect(result.result).not.toBe('unchanged');
+    test('both sides the same → unchanged', () => {
+        expect(compare(rule(), rule({ published: true }), null).result).toBe('unchanged');
+    });
+
+    test('both sides differ → conflict, since which side changed is unknown', () => {
+        const result = compare(rule({ name: 'A' }), rule({ name: 'B' }), null);
+        expect(result.result).toBe('conflict');
+        expect(result.details.reason).toMatch(/no download record/);
     });
 });

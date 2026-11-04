@@ -7,6 +7,8 @@ const reactorCore = require('./lib/reactor-core');
 const { listAll, latestSucceededBuild, latestSucceededBuilds, latestSucceededLibraryBuild } = reactorCore.api;
 const { diffSets } = reactorCore.compareBuilds;
 const { listArchiveWork, archiveItem, markDeletions } = reactorCore.archive;
+const { rebuildNameLinks } = reactorCore.nameLinks;
+const syncLib = reactorCore.sync;
 const db = require('./lib/db');
 
 // --- TLS ---
@@ -488,6 +490,8 @@ ipcMain.handle('perform-export', async (event, args) => {
 
                 // Fetch components for all rules in parallel (chunked)
                 const CHUNK_SIZE = 5;
+                const ruleComponents = [];
+                let componentsComplete = true;
 
                 for (let j = 0; j < rules.length; j += CHUNK_SIZE) {
                     const chunk = rules.slice(j, j + CHUNK_SIZE);
@@ -499,11 +503,20 @@ ipcMain.handle('perform-export', async (event, args) => {
                             for (const rc of components) {
                                 await reactorCore.toFiles(rc, targetDir, fetchPkg);
                             }
+                            ruleComponents.push(...components);
                         } catch (rcErr) {
+                            componentsComplete = false;
                             console.error(`Failed to fetch components for rule ${rule.attributes.name}:`, rcErr.message);
                         }
                     }));
                 }
+
+                // Name links, one per item. A partial component list would
+                // drop the links of the components it missed.
+                rebuildNameLinks(path.join(targetDir, 'rules'), rules);
+                rebuildNameLinks(path.join(targetDir, 'data_elements'), dataElements);
+                rebuildNameLinks(path.join(targetDir, 'extensions'), extensions);
+                if (componentsComplete) rebuildNameLinks(path.join(targetDir, 'rule_components'), ruleComponents);
             }
 
             // --- OPTION 2: Library Export ---
@@ -574,6 +587,11 @@ ipcMain.handle('perform-export', async (event, args) => {
                         } catch (e) { console.error('[DB] library RC cache:', e.message); }
                         for (const rc of ruleComponents) await reactorCore.toFiles(rc, targetDir, fetchPkg);
 
+                        rebuildNameLinks(path.join(targetDir, 'rules'), rules);
+                        rebuildNameLinks(path.join(targetDir, 'data_elements'), dataElements);
+                        rebuildNameLinks(path.join(targetDir, 'extensions'), extensions);
+                        rebuildNameLinks(path.join(targetDir, 'rule_components'), ruleComponents);
+
                     } else {
                         console.log(`Skipping Library Export for ${prop.name}: No builds found.`);
                     }
@@ -634,50 +652,25 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
         }, null, 2));
         sendLog(`Created project config at ${targetDir}`);
 
-        // 2. Fetch & Save Everything
-        sendLog(`Fetching Rules...`);
-        const rules = await listAll(get, `https://reactor.adobe.io/properties/${property.id}/rules`);
-        try { db.upsertRules(rules, property.id); }
+        // 2. List everything, then write it (lib/reactor-core/sync.js)
+        sendLog(`Fetching Rules, Data Elements, Extensions and Rule Components...`);
+        const listing = await syncLib.listProperty(get, property.id);
+        listing.failed.forEach(rule => sendLog(`Error fetching components for ${rule.name}: ${rule.message}`));
+
+        try { db.upsertRules(listing.rules, property.id); }
         catch (e) { console.error('[DB] sync upsertRules:', e.message); }
-        for (const rule of rules) {
-            await reactorCore.toFiles(rule, targetDir, fetchPkg);
-        }
-
-        sendLog(`Fetching Data Elements...`);
-        const dataElements = await listAll(get, `https://reactor.adobe.io/properties/${property.id}/data_elements`);
-        try { db.upsertDataElements(dataElements, property.id); }
+        try { db.upsertDataElements(listing.data_elements, property.id); }
         catch (e) { console.error('[DB] sync upsertDataElements:', e.message); }
-        for (const de of dataElements) {
-            await reactorCore.toFiles(de, targetDir, fetchPkg);
-        }
-
-        sendLog(`Fetching Extensions...`);
-        const extensions = await listAll(get, `https://reactor.adobe.io/properties/${property.id}/extensions`);
-        try { db.upsertExtensions(extensions, property.id); }
+        try { db.upsertExtensions(listing.extensions, property.id); }
         catch (e) { console.error('[DB] sync upsertExtensions:', e.message); }
-        for (const ext of extensions) {
-            await reactorCore.toFiles(ext, targetDir, fetchPkg);
+        for (const rule of listing.rules) {
+            const components = listing.rule_components.filter(rc => listing.ruleOf.get(rc.id) === rule.id);
+            try { db.upsertRuleComponents(components, rule.id, property.id); }
+            catch (e) { console.error('[DB] sync upsertRuleComponents:', e.message); }
         }
 
-        sendLog(`Fetching Rule Components...`);
-        const CHUNK_SIZE = 5;
-        for (let j = 0; j < rules.length; j += CHUNK_SIZE) {
-            const chunk = rules.slice(j, j + CHUNK_SIZE);
-            await Promise.all(chunk.map(async (rule) => {
-                try {
-                    const components = await listAll(get, `https://reactor.adobe.io/rules/${rule.id}/rule_components`);
-                    try { db.upsertRuleComponents(components, rule.id, property.id); }
-                    catch (e) { console.error('[DB] sync upsertRuleComponents:', e.message); }
-                    for (const rc of components) {
-                        await reactorCore.toFiles(rc, targetDir, fetchPkg);
-                    }
-                } catch (rcErr) {
-                    sendLog(`Error fetching components for ${rule.attributes.name}: ${rcErr.message}`);
-                }
-            }));
-        }
-
-        return "Download Complete!";
+        sendLog(`Writing files...`);
+        return await syncLib.writeDownload({ targetDir, listing, fetchPkg });
     } catch (error) {
         console.error(error);
         throw new Error(`Sync Download Failed: ${error.message}`);
@@ -697,13 +690,9 @@ ipcMain.handle('perform-sync-diff', async (event, args) => {
     const headers = getHeaders(token, creds);
     const get = reactorGet(headers);
 
-    // Define API Fetchers for the Diff Runner
-    const api = {
-        getRules: () => listAll(get, `https://reactor.adobe.io/properties/${propertyId}/rules`),
-        getDataElements: () => listAll(get, `https://reactor.adobe.io/properties/${propertyId}/data_elements`),
-        getExtensions: () => listAll(get, `https://reactor.adobe.io/properties/${propertyId}/extensions`)
-    };
-    
+    // List functions for the Diff Runner, rule components included
+    const api = syncLib.syncApi(get, propertyId);
+
     const fetchPkg = (id) => getExtensionPackage(id, headers);
 
     try {

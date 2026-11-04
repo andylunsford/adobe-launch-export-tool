@@ -16,6 +16,31 @@ async function selectSyncFolder() {
     }
 }
 
+// One line per item: its folder, and its name (a component's with its rule's)
+function itemLine(mark, item, note = '') {
+    const name = item.rule_name ? `${item.rule_name} › ${item.name}` : item.name;
+    return `  [${mark}] ${item.path || `${item.type}/${item.id}`}${name ? ` (${name})` : ''}${note}`;
+}
+
+function logList(property, title, mark, items) {
+    if (items.length === 0) return;
+    ui.logSync(`[${property.name}] ${title} [${items.length}]`);
+    items.forEach(item => ui.logSync(itemLine(mark, item)));
+}
+
+function reportDownload(property, summary) {
+    ui.logSync(`[${property.name}] ✅ Downloaded ${summary.written} items.`);
+    if (summary.removedFiles > 0) {
+        ui.logSync(`[${property.name}] Removed ${summary.removedFiles} code files the items no longer have.`);
+    }
+    logList(property, 'Moved to _deleted (deleted in Launch)', 'x', summary.setAside);
+    logList(property, 'Kept local edits (to take Launch\'s version, delete the folder and download again)', '~', summary.keptLocal);
+    logList(property, 'Kept, though Launch no longer lists them (local edits, or not downloaded by this tool)', '?', summary.keptUnlisted);
+    if (summary.incomplete.length > 0) {
+        ui.logSync(`[${property.name}] ⚠ Some rules' components couldn't be listed, so no rule component folders were moved or relinked.`);
+    }
+}
+
 // --- Download Initialization ---
 async function initSyncDownload() {
     const properties = ui.getSelectedProperties();
@@ -34,13 +59,13 @@ async function initSyncDownload() {
         for (const property of properties) {
             ui.logSync(`[${property.name}] Starting download...`);
 
-            const result = await window.api.performSyncDownload({
+            const summary = await window.api.performSyncDownload({
                 property: { id: property.id, name: property.name },
                 targetDir: `${folder}/${property.name}`, // APPEND PROPERTY NAME
                 token: ui.getGlobalToken(),
                 creds: ui.getCurrentCreds()
             });
-            ui.logSync(`[${property.name}] ✅ ${result}`);
+            reportDownload(property, summary);
         }
         ui.logSync("All downloads complete.");
     } catch (e) {
@@ -72,20 +97,22 @@ async function checkSyncStatus() {
                 creds: ui.getCurrentCreds()
             });
 
-            if (result.added.length > 0) {
-                ui.logSync(`[${property.name}] Files To Be Pushed (New) [${result.added.length}]`);
-                result.added.forEach(f => ui.logSync(`  [+] ${f.path}`));
+            if (!result.hasBase) {
+                ui.logSync(`[${property.name}] No download record yet, so each folder was compared with its own data.json. Download again to create one.`);
             }
-            if (result.modified.length > 0) {
-                ui.logSync(`[${property.name}] Files To Be Pushed (Modified) [${result.modified.length}]`);
-                result.modified.forEach(f => ui.logSync(`  [~] ${f.path}`));
+            logList(property, 'Files To Be Pushed (New)', '+', result.added);
+            logList(property, 'Files To Be Pushed (Modified)', '~', result.modified);
+            logList(property, 'Files To Be Pushed (Deleted Locally)', '-', result.deleted);
+            logList(property, 'Files To Be Pulled (New/Modified in Launch)', '<', result.behind);
+            logList(property, 'Deleted in Launch (Download moves these to _deleted)', 'x', result.deletedInLaunch);
+            if (result.conflict.length > 0) {
+                ui.logSync(`[${property.name}] ⚠ Conflicts [${result.conflict.length}]`);
+                result.conflict.forEach(item => ui.logSync(itemLine('!', item, `: ${item.details.reason}`)));
             }
-            if (result.behind.length > 0) {
-                ui.logSync(`[${property.name}] Files To Be Pulled (New/Modified in Launch) [${result.behind.length}]`);
-                result.behind.forEach(f => ui.logSync(`  [<] ${f.path}`));
-            }
-            
-            if (result.added.length === 0 && result.modified.length === 0 && result.behind.length === 0) {
+            result.errors.forEach(error => ui.logSync(`[${property.name}] ⚠ ${error.path ? `${error.path}: ` : ''}${error.message}`));
+
+            const states = ['added', 'modified', 'deleted', 'behind', 'deletedInLaunch', 'conflict', 'errors'];
+            if (states.every(state => result[state].length === 0)) {
                 ui.logSync(`[${property.name}] ✅ Everything is in sync!`);
             }
 
