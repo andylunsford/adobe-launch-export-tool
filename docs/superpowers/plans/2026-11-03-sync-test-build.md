@@ -457,7 +457,7 @@ test('HTML custom code outside Library Loaded is moved, with a warning', () => {
 });
 test('custom code in a Library Loaded rule with sequencing off gets a warning', () => {
     const { warnings } = ruleEntry(ruleAt(0), withPkg(PRODUCTION.components.get(ruleAt(0).id)), { ...opts, sequencing: false });
-    expect(warnings.some(w => /sequencing is off/.test(w))).toBe(true);
+    expect(warnings.some(w => /sequencing off/.test(w))).toBe(true);
 });
 test('cleanText, and storageDuration with another optional field, get a warning', () => {
     const rev = revision('data_elements', 33, { name: 'X', delegate_descriptor_id: 'core::dataElements::javascript-variable', settings: '{"path":"x"}', clean_text: true, storage_duration: 'session', default_value: 'a' });
@@ -670,15 +670,16 @@ test('byRevisionId is code-unit order', () => {
   - `a disabled library rule drops production's entry`.
   - `a library rule whose folder was deleted keeps production's entry`: it's absent from `library.rules`, so
     production's `RL…12` stays and nothing is reported for it.
-  - `warns when the library changes nothing`: a library holding only production's own revisions, unedited, gives
-    exactly one warning, `"Nothing to apply: the test build is production's script on the development environment"`.
+  - `warns when the library changes nothing`: a library holding only production's own revisions, unedited, with
+    `inlineMovedCode: false`, gives exactly one warning,
+    `"Nothing to apply: the test build is production's script on the development environment"`.
   - `a delegate production doesn't load stops`: a library rule using `core::events::click`, which is added to the
     package but not loaded by production. Expect the problem `"rule Click: core/src/lib/events/click.js isn't loaded by production"`.
   - `an extension on another package version stops`.
   - `environment is the development one and buildDate is now`: expect `environment` to be
     `{ id: 'EN…01', stage: 'development' }` and `buildInfo.buildDate` to be `'2026-11-03T12:00:00Z'` for
     `now = new Date('2026-11-03T12:00:00.123Z')`. Other `buildInfo` keys are unchanged.
-  - `custom code files use production's build folder`: file text is
+  - `custom code files use production's build folder`, with `inlineMovedCode: false`: file text is
     `` `_satellite.__registerScript('${url}', ${JSON.stringify(code)});` `` with no trailing newline.
   - `readLibraryItems leaves out a deleted component`: write a library with `writeDownload`, delete one
     `rule_components/RC…` folder, and expect that rule's components to lack it.
@@ -785,7 +786,9 @@ test('byRevisionId is code-unit order', () => {
   - `stops when the folder isn't a library sync`;
   - `stops and writes nothing when the script doesn't round-trip`: `getText` returns the fixture with an extra
     space, and the overrides dir stays empty;
-  - `stops when a stage-aware extension has no development destination`;
+  - `stops when a stage-aware extension has no development destination`. Production needs an `adobe-alloy`
+    extension for this, so `getText` serves a variant: parse the fixture, add the extension entry and its matching
+    production revision and package so check 2 still passes, and print it with `printScript`;
   - `uses environmentId when the library has no environment`.
 - [ ] **Step 2: Run to verify they fail.** Run `npx jest __tests__/runtime-script/test-build.test.js`.
 - [ ] **Step 3: Implement `generateTestBuild`.**
