@@ -71,17 +71,18 @@ function withVisitor(library, settings = { path: 'visitor.id' }) {
 
 /**
  * Production with these extensions added: the script that serves them, and the revisions
- * and packages that make the entry writer give the same entries.
+ * and packages that make the entry writer give the same entries. An extension can list
+ * the modules production loads and the delegates its package has.
  */
 function withExtensions(added) {
     const parsed = parseScript(FIXTURE);
     const extensions = [];
     const packages = [];
-    added.forEach(({ name, settings }, i) => {
-        const pkg = { id: reactorId('EP', i + 2), type: 'extension_packages', attributes: { name, version: '1.0.0', configuration: {} } };
+    added.forEach(({ name, settings, modules = {}, delegates = {} }, i) => {
+        const pkg = { id: reactorId('EP', i + 2), type: 'extension_packages', attributes: { name, version: '1.0.0', configuration: {}, ...delegates } };
         const extension = revision('extensions', 42 + i, { name, display_name: name, settings: json(settings) }, reactorId('EX', i + 2));
         extension.relationships.extension_package.data.id = pkg.id;
-        parsed.container.extensions[name] = extensionEntry(extension, pkg, {}).entry;
+        parsed.container.extensions[name] = extensionEntry(extension, pkg, modules).entry;
         extensions.push(extension);
         packages.push(pkg);
     });
@@ -90,6 +91,27 @@ function withExtensions(added) {
         revisions: { ...PRODUCTION.revisions, extensions: [...PRODUCTION.revisions.extensions, ...extensions] },
         packages: [PACKAGE, ...packages]
     };
+}
+
+// Production with the Web SDK, its Send event module loaded, and one instance with a datastream per stage
+const SEND_EVENT = { id: 'adobe-alloy::actions::send-event', name: 'send-event', displayName: 'Send event', libPath: 'dist/lib/actions/sendEvent/index.js' };
+const withAlloy = () => withExtensions([{
+    name: 'adobe-alloy',
+    settings: { instances: [{ name: 'alloy', edgeConfigId: 'prod-datastream', developmentEdgeConfigId: 'dev-datastream' }] },
+    modules: { [`adobe-alloy/${SEND_EVENT.libPath}`]: { name: SEND_EVENT.name, displayName: SEND_EVENT.displayName } },
+    delegates: { actions: [SEND_EVENT] }
+}]);
+
+/** A library holding a new rule, Send, whose Web SDK Send event action has these overrides. */
+function sendEventRule(edgeConfigOverrides) {
+    const rule = revision('rules', 14, { name: 'Send' }, reactorId('RL', 3));
+    const event = component(29, { name: 'DOM Ready', delegate_descriptor_id: 'core::events::dom-ready', order: 0, rule_order: 50 });
+    const send = component(30, {
+        name: 'Send event', delegate_descriptor_id: SEND_EVENT.id, order: 1, settings: json({ instanceName: 'alloy', edgeConfigOverrides })
+    });
+    // withAlloy's package
+    send.relationships.updated_with_extension_package.data.id = reactorId('EP', 2);
+    return { rules: [rule], data_elements: [], extensions: [], components: new Map([[rule.id, [event, send]]]) };
 }
 
 /**
@@ -450,6 +472,27 @@ describe('generateTestBuild', () => {
         const fixed = withExtensions([{ name: 'adobe-alloy', settings: { instances: [{ edgeConfigId: 'prod-datastream', developmentEdgeConfigId: 'dev-datastream' }] } }]);
         const { report } = await generate(launch(fixed));
         expect(report.warnings).toEqual(['Click: custom code kept inline; Launch would load it from a file']);
+    });
+
+    test("stops and writes nothing when a library Send event action's development datastream is production's", async () => {
+        const library = sendEventRule({ development: { datastreamId: 'prod-datastream' } });
+        await download(library);
+
+        const error = await stopped(generate(launch({ ...withAlloy(), library })));
+        expect(error).toBeInstanceOf(TestBuildStop);
+        expect(error.problems).toEqual(["rule Send: adobe-alloy action 0: the development datastream override is production's"]);
+        expect(fs.readdirSync(overridesDir)).toEqual([]);
+        expect(fs.existsSync(manifestFile())).toBe(false);
+    });
+
+    test('builds a library Send event action whose development datastream override is its own', async () => {
+        const library = sendEventRule({ development: { datastreamId: 'dev-other' }, production: { datastreamId: 'prod-other' } });
+        await download(library);
+
+        const { report } = await generate(launch({ ...withAlloy(), library }));
+        expect(report).toEqual({ replaced: [], added: ['rule Send'], dropped: [], warnings: [] });
+        const script = fs.readFileSync(urlToPath(overridesDir, PRODUCTION_DEBUG_URL), 'utf8');
+        expect(parseScript(script).container.rules.at(-1).actions[0].settings.edgeConfigOverrides.development).toEqual({ datastreamId: 'dev-other' });
     });
 
     test("warns which extensions don't choose a destination by stage", async () => {

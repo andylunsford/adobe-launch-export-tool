@@ -17,6 +17,21 @@ const NO_REPORT_SUITES = 'adobe-analytics: no development report suites, so test
 const PRODUCTION_REPORT_SUITE = "adobe-analytics: a development report suite is production's";
 const REPORT_SUITES_UNREADABLE = "adobe-analytics: can't read its report suites, so test traffic could reach production";
 
+// Web SDK overrides, on an instance or on a rule component
+const OVERRIDES_UNREADABLE = (where) => `${where}: can't read its overrides, so test traffic could reach production`;
+const OVERRIDE_DATASTREAM = (where) => `${where}: the development datastream override is production's`;
+const OVERRIDE_REPORT_SUITE = (where) => `${where}: a development report suite override is production's`;
+const SEND_EVENT = 'adobe-alloy/dist/lib/actions/sendEvent/index.js';
+const sendEvent = (edgeConfigOverrides) => ({ modulePath: SEND_EVENT, settings: { instanceName: 'alloy', edgeConfigOverrides } });
+const customCode = { modulePath: 'core/src/lib/actions/customCode.js', settings: { source: 'console.log(1);' } };
+const domReady = { modulePath: 'core/src/lib/events/domReady.js', settings: {} };
+const rule = (name, { events = [domReady], conditions = [], actions = [] }) => ({ id: `RL-${name}`, name, events, conditions, actions });
+const overriding = (edgeConfigOverrides, ids = ['prod-datastream', 'dev-datastream']) => ({ ...instance(...ids), edgeConfigOverrides });
+const PRODUCTION_ALLOY = { 'adobe-alloy': alloy(instance('prod-datastream', 'dev-datastream')) };
+/** The check on a container with these rules, and production's one alloy instance unless other extensions are given. */
+const checkRules = (rules, extensions = PRODUCTION_ALLOY) => checkStageDestinations({ ...container(extensions), rules });
+const actionAt = (name, index) => `rule ${name}: adobe-alloy action ${index}`;
+
 describe('checkStageDestinations', () => {
     describe('adobe-alloy', () => {
         test('alloy with a development datastream passes', () => {
@@ -162,6 +177,185 @@ describe('checkStageDestinations', () => {
             ['a data element reference among the production report suites', { production: ['prod-%env%'], development: ['dev-suite'] }],
         ])('analytics with %s can\'t be read, so it stops', (_, accounts) => {
             expect(check({ 'adobe-analytics': analytics(accounts) }).problems).toEqual([REPORT_SUITES_UNREADABLE]);
+        });
+
+        // AppMeasurement tags every report suite in a comma-separated account
+        test('a report suite inside a comma-joined entry is a report suite', () => {
+            expect(check({ 'adobe-analytics': analytics({ production: ['prodrs'], development: ['devrs, prodrs'] }) }).problems).toEqual([PRODUCTION_REPORT_SUITE]);
+            expect(check({ 'adobe-analytics': analytics({ production: ['otherrs,PRODRS'], development: ['prodrs'] }) }).problems).toEqual([PRODUCTION_REPORT_SUITE]);
+        });
+
+        test('a comma-joined entry of distinct report suites passes', () => {
+            expect(check({ 'adobe-analytics': analytics({ production: ['prodrs, rolluprs'], development: ['devrs,devrollup'] }) }).problems).toEqual([]);
+        });
+
+        test('an entry of only commas and spaces is blank', () => {
+            expect(check({ 'adobe-analytics': analytics({ production: ['prodrs'], development: [' , ,'] }) }).problems).toEqual([NO_REPORT_SUITES]);
+        });
+    });
+
+    describe('Web SDK overrides', () => {
+        test('a Send event action whose development datastream is an instance\'s production datastream stops', () => {
+            const rules = [rule('Send', { actions: [sendEvent({ development: { datastreamId: 'prod-datastream' } })] })];
+            expect(checkRules(rules).problems).toEqual([OVERRIDE_DATASTREAM(actionAt('Send', 0))]);
+        });
+
+        test("a development datastream that is another action's production override stops", () => {
+            const rules = [
+                rule('Checkout', { actions: [sendEvent({ production: { datastreamId: 'checkout-prod' }, development: { datastreamId: 'checkout-dev' } })] }),
+                rule('Send', { actions: [customCode, sendEvent({ development: { datastreamId: ' Checkout-Prod ' } })] })
+            ];
+            expect(checkRules(rules).problems).toEqual([OVERRIDE_DATASTREAM(actionAt('Send', 1))]);
+        });
+
+        test("an instance's development datastream that is an override's production datastream stops", () => {
+            const rules = [rule('Send', { actions: [sendEvent({ production: { datastreamId: 'dev-datastream' } })] })];
+            expect(checkRules(rules).problems).toEqual([PRODUCTION_DATASTREAM(0)]);
+        });
+
+        test('a distinct development datastream override passes', () => {
+            const rules = [rule('Send', { actions: [sendEvent({ production: { datastreamId: 'prod-other' }, development: { datastreamId: 'dev-other' } })] })];
+            expect(checkRules(rules)).toEqual({ problems: [], unaware: [] });
+        });
+
+        test('a blank development datastream override sends where the instance does, so it passes', () => {
+            const rules = [rule('Send', { actions: [sendEvent({ development: { datastreamId: '  ' } }), sendEvent({ development: { datastreamId: '' } })] })];
+            expect(checkRules(rules).problems).toEqual([]);
+        });
+
+        test('staging and production overrides with no development key pass', () => {
+            const overrides = { staging: { datastreamId: 'staging-other' }, production: { datastreamId: 'prod-other', com_adobe_analytics: { reportSuites: ['prodrs'] } } };
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([]);
+        });
+
+        test('a disabled development override that names production\'s datastream still stops', () => {
+            const overrides = { development: { enabled: false, datastreamId: 'prod-datastream' } };
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([OVERRIDE_DATASTREAM(actionAt('Send', 0))]);
+        });
+
+        // With no stage keys, the runtime uses the whole object in every stage, production included
+        test('an override for every stage that names report suites stops', () => {
+            const overrides = { com_adobe_analytics: { reportSuites: ['globalrs'] } };
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([OVERRIDE_REPORT_SUITE(actionAt('Send', 0))]);
+        });
+
+        test('an override for every stage that names a datastream stops', () => {
+            const overrides = { enabled: true, datastreamId: 'other-datastream' };
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([OVERRIDE_DATASTREAM(actionAt('Send', 0))]);
+        });
+
+        test('an override for every stage that names neither passes', () => {
+            const overrides = { com_adobe_identity: { idSyncContainerId: 30793 } };
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([]);
+        });
+
+        test("development report suites that share one with another override's production report suites stop", () => {
+            const rules = [
+                rule('Checkout', { actions: [sendEvent({ production: { com_adobe_analytics: { reportSuites: ['prodrs', 'rolluprs'] } } })] }),
+                rule('Send', { actions: [sendEvent({ development: { com_adobe_analytics: { reportSuites: ['devrs', 'RollupRS'] } } })] })
+            ];
+            expect(checkRules(rules).problems).toEqual([OVERRIDE_REPORT_SUITE(actionAt('Send', 0))]);
+        });
+
+        test('a shared report suite inside a comma-joined entry stops', () => {
+            const rules = [
+                rule('Checkout', { actions: [sendEvent({ production: { com_adobe_analytics: { reportSuites: ['prodrs,rolluprs'] } } })] }),
+                rule('Send', { actions: [sendEvent({ development: { com_adobe_analytics: { reportSuites: ['devrs, rolluprs'] } } })] })
+            ];
+            expect(checkRules(rules).problems).toEqual([OVERRIDE_REPORT_SUITE(actionAt('Send', 0))]);
+        });
+
+        test("an instance's development report suite override that is the Analytics extension's production report suite stops", () => {
+            const extensions = {
+                'adobe-alloy': alloy(overriding({ development: { com_adobe_analytics: { reportSuites: ['devrs', 'prodrs'] } } })),
+                'adobe-analytics': analytics({ production: ['prodrs'], development: ['devrs'] })
+            };
+            expect(checkRules([], extensions).problems).toEqual([OVERRIDE_REPORT_SUITE('adobe-alloy instance 0')]);
+        });
+
+        test("the Analytics extension's development report suite that is an override's production report suite stops", () => {
+            const extensions = {
+                'adobe-alloy': alloy(overriding({ production: { com_adobe_analytics: { reportSuites: ['devrs'] } } })),
+                'adobe-analytics': analytics({ production: ['prodrs'], development: ['devrs'] })
+            };
+            expect(checkRules([], extensions).problems).toEqual([PRODUCTION_REPORT_SUITE]);
+        });
+
+        test("an instance's development datastream override that is production's stops", () => {
+            const instances = [instance('prod-a', 'dev-a'), overriding({ development: { datastreamId: 'PROD-A' } }, ['prod-b', 'dev-b'])];
+            expect(checkRules([], { 'adobe-alloy': alloy(...instances) }).problems).toEqual([OVERRIDE_DATASTREAM('adobe-alloy instance 1')]);
+        });
+
+        test("an instance's problem with its own datastream comes before its overrides'", () => {
+            const overrides = { development: { datastreamId: 'prod-datastream', com_adobe_analytics: { reportSuites: ['prodrs'] } }, production: { com_adobe_analytics: { reportSuites: ['prodrs'] } } };
+            const extensions = { 'adobe-alloy': alloy(overriding(overrides, ['prod-datastream', ''])) };
+            expect(checkRules([], extensions).problems).toEqual([
+                NO_DATASTREAM(0), OVERRIDE_DATASTREAM('adobe-alloy instance 0'), OVERRIDE_REPORT_SUITE('adobe-alloy instance 0')
+            ]);
+        });
+
+        test.each([
+            ['a string', '%overrides%'],
+            ['a list', [{ development: { datastreamId: 'dev-other' } }]],
+            ['a number', 7],
+            ['a development override that is a string', { development: 'dev-other' }],
+            ['a production override that is a list', { production: [{ datastreamId: 'prod-other' }] }],
+            ['a staging override that is a number', { staging: 1 }],
+            ['a data element reference as the development datastream', { development: { datastreamId: '%devDatastream%' } }],
+            ['a data element reference as the production datastream', { production: { datastreamId: 'prod-%env%' } }],
+            ['a data element reference as the datastream for every stage', { datastreamId: '%datastream%' }],
+            ['a development datastream that is a number', { development: { datastreamId: 7 } }],
+            ['a development datastream that is null', { development: { datastreamId: null } }],
+            ['Analytics overrides that are a string', { development: { com_adobe_analytics: 'devrs' } }],
+            ['Analytics overrides that are null', { development: { com_adobe_analytics: null } }],
+            ['report suites that are a string', { development: { com_adobe_analytics: { reportSuites: 'devrs' } } }],
+            ['a number among the report suites', { production: { com_adobe_analytics: { reportSuites: ['prodrs', 7] } } }],
+            ['a data element reference among the report suites', { development: { com_adobe_analytics: { reportSuites: ['%rs%'] } } }],
+        ])('a Send event action with %s can\'t be read, so it stops', (_, overrides) => {
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([OVERRIDES_UNREADABLE(actionAt('Send', 0))]);
+        });
+
+        test("an instance's overrides that can't be read stop", () => {
+            const instances = [instance('prod-a', 'dev-a'), overriding('%overrides%', ['prod-b', 'dev-b'])];
+            expect(checkRules([], { 'adobe-alloy': alloy(...instances) }).problems).toEqual([OVERRIDES_UNREADABLE('adobe-alloy instance 1')]);
+        });
+
+        test('no overrides, or null ones, have nothing to stop', () => {
+            const rules = [rule('Send', { actions: [sendEvent(undefined), sendEvent(null), { modulePath: SEND_EVENT }] })];
+            const extensions = { 'adobe-alloy': alloy(overriding(null), overriding(undefined, ['prod-b', 'dev-b'])) };
+            expect(checkRules(rules, extensions)).toEqual({ problems: [], unaware: [] });
+        });
+
+        test('every adobe-alloy event, condition and action is read, and only those', () => {
+            const unreadable = { modulePath: 'adobe-alloy/dist/lib/conditions/anything/index.js', settings: { edgeConfigOverrides: 'x' } };
+            const notAlloy = { modulePath: 'other-extension/src/actions/send.js', settings: { edgeConfigOverrides: 'x' } };
+            const rules = [rule('Send', {
+                events: [domReady, { ...unreadable, modulePath: 'adobe-alloy/dist/lib/events/anything/index.js' }],
+                conditions: [notAlloy, unreadable],
+                actions: [notAlloy, customCode, sendEvent('x')]
+            })];
+            expect(checkRules(rules).problems).toEqual([
+                OVERRIDES_UNREADABLE('rule Send: adobe-alloy event 1'),
+                OVERRIDES_UNREADABLE('rule Send: adobe-alloy condition 1'),
+                OVERRIDES_UNREADABLE('rule Send: adobe-alloy action 2')
+            ]);
+        });
+
+        test('problems come for the extensions first, then each rule in container order', () => {
+            const rules = [
+                rule('B', { actions: [sendEvent({ development: { datastreamId: 'prod-datastream' } })] }),
+                rule('A', { actions: [sendEvent('%overrides%')] })
+            ];
+            const extensions = { 'adobe-analytics': analytics({ development: [] }), 'adobe-alloy': alloy(instance('prod-datastream', '')) };
+            expect(checkRules(rules, extensions)).toEqual({
+                problems: [NO_REPORT_SUITES, NO_DATASTREAM(0), OVERRIDE_DATASTREAM(actionAt('B', 0)), OVERRIDES_UNREADABLE(actionAt('A', 0))],
+                unaware: []
+            });
+        });
+
+        test("a rule's overrides are checked even without the alloy extension", () => {
+            const overrides = { datastreamId: 'other-datastream' };
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })], {}).problems).toEqual([OVERRIDE_DATASTREAM(actionAt('Send', 0))]);
         });
     });
 
