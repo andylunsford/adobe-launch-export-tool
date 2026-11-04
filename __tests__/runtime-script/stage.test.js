@@ -21,6 +21,10 @@ const REPORT_SUITES_UNREADABLE = "adobe-analytics: can't read its report suites,
 const OVERRIDES_UNREADABLE = (where) => `${where}: can't read its overrides, so test traffic could reach production`;
 const OVERRIDE_DATASTREAM = (where) => `${where}: the development datastream override is production's`;
 const OVERRIDE_REPORT_SUITE = (where) => `${where}: a development report suite override is production's`;
+const OVERRIDE_DATASET = (where) => `${where}: a development dataset override is production's`;
+const datasets = (event, profile) => ({
+    com_adobe_experience_platform: { datasets: { ...(event !== undefined && { event: { datasetId: event } }), ...(profile !== undefined && { profile: { datasetId: profile } }) } }
+});
 const SEND_EVENT = 'adobe-alloy/dist/lib/actions/sendEvent/index.js';
 const sendEvent = (edgeConfigOverrides) => ({ modulePath: SEND_EVENT, settings: { instanceName: 'alloy', edgeConfigOverrides } });
 const customCode = { modulePath: 'core/src/lib/actions/customCode.js', settings: { source: 'console.log(1);' } };
@@ -356,6 +360,91 @@ describe('checkStageDestinations', () => {
         test("a rule's overrides are checked even without the alloy extension", () => {
             const overrides = { datastreamId: 'other-datastream' };
             expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })], {}).problems).toEqual([OVERRIDE_DATASTREAM(actionAt('Send', 0))]);
+        });
+
+        // Turbine resolves settings that are one data element reference into that data element's value
+        test.each([
+            ['a data element reference', '%Send settings%'],
+            ['a list', [{ edgeConfigOverrides: { development: { datastreamId: 'prod-datastream' } } }]],
+            ['a number', 7]
+        ])("an adobe-alloy action whose settings are %s can't be read, so it stops", (_, settings) => {
+            expect(checkRules([rule('Send', { actions: [{ modulePath: SEND_EVENT, settings }] })]).problems).toEqual([OVERRIDES_UNREADABLE(actionAt('Send', 0))]);
+        });
+
+        test('an adobe-alloy action with null settings has nothing to stop', () => {
+            expect(checkRules([rule('Send', { actions: [{ modulePath: SEND_EVENT, settings: null }] })]).problems).toEqual([]);
+        });
+
+        test("a development event dataset override that is production's stops", () => {
+            const overrides = { development: datasets('PROD-EVENTS'), production: datasets('prod-events') };
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([OVERRIDE_DATASET(actionAt('Send', 0))]);
+        });
+
+        test("a development profile dataset override that another override's production one names stops", () => {
+            const extensions = { 'adobe-alloy': alloy(overriding({ production: datasets(undefined, 'prod-profiles') })) };
+            const rules = [rule('Send', { actions: [sendEvent({ development: datasets('dev-events', 'prod-profiles') })] })];
+            expect(checkRules(rules, extensions).problems).toEqual([OVERRIDE_DATASET(actionAt('Send', 0))]);
+        });
+
+        test('an override for every stage that names a dataset stops', () => {
+            expect(checkRules([rule('Send', { actions: [sendEvent(datasets('any-events'))] })]).problems).toEqual([OVERRIDE_DATASET(actionAt('Send', 0))]);
+        });
+
+        test('development datasets of their own pass', () => {
+            const overrides = { development: datasets('dev-events', 'dev-profiles'), production: datasets('prod-events', 'prod-profiles') };
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([]);
+        });
+
+        test.each([
+            ['platform overrides that are a string', { development: { com_adobe_experience_platform: 'x' } }],
+            ['datasets that are a list', { development: { com_adobe_experience_platform: { datasets: ['x'] } } }],
+            ['an event dataset that is a string', { development: { com_adobe_experience_platform: { datasets: { event: 'x' } } } }],
+            ['a data element reference as the event dataset', { development: datasets('%events%') }],
+            ['a profile dataset id that is a number', { production: datasets(undefined, 7) }]
+        ])("a Send event action with %s can't be read, so it stops", (_, overrides) => {
+            expect(checkRules([rule('Send', { actions: [sendEvent(overrides)] })]).problems).toEqual([OVERRIDES_UNREADABLE(actionAt('Send', 0))]);
+        });
+    });
+
+    // Production keeps running its own script while the test build is tried, so a destination it
+    // names is production's even where the test build replaced or dropped the setting that named it
+    describe("production's own destinations", () => {
+        const sendRule = (overrides) => rule('Send', { actions: [sendEvent(overrides)] });
+        const withRules = (rules, extensions = PRODUCTION_ALLOY) => ({ ...container(extensions), rules });
+
+        test("a development datastream override naming one only the replaced production rule used stops", () => {
+            const production = withRules([sendRule({ production: { datastreamId: 'prod-eu' } })]);
+            const build = withRules([sendRule({ development: { datastreamId: 'PROD-EU' } })]);
+            expect(checkStageDestinations(build, production).problems).toEqual([OVERRIDE_DATASTREAM(actionAt('Send', 0))]);
+        });
+
+        test("a development report suite override naming one only a dropped production rule used stops", () => {
+            const production = withRules([sendRule({ production: { com_adobe_analytics: { reportSuites: ['eurs'] } } })]);
+            const build = withRules([rule('Other', { actions: [sendEvent({ development: { com_adobe_analytics: { reportSuites: ['eurs'] } } })] })]);
+            expect(checkStageDestinations(build, production).problems).toEqual([OVERRIDE_REPORT_SUITE(actionAt('Other', 0))]);
+        });
+
+        test("an instance's development datastream that production's replaced instance used stops", () => {
+            const production = container({ 'adobe-alloy': alloy(instance('prod-datastream', 'dev-datastream')) });
+            const build = container({ 'adobe-alloy': alloy(instance('new-datastream', 'prod-datastream')) });
+            expect(checkStageDestinations(build, production).problems).toEqual([PRODUCTION_DATASTREAM(0)]);
+        });
+
+        test("a development report suite that production's replaced Analytics settings used stops", () => {
+            const production = container({ 'adobe-analytics': analytics({ production: ['prodrs'], development: ['devrs'] }) });
+            const build = container({ 'adobe-analytics': analytics({ production: ['newrs'], development: ['prodrs'] }) });
+            expect(checkStageDestinations(build, production).problems).toEqual([PRODUCTION_REPORT_SUITE]);
+        });
+
+        test("a development dataset that only production's replaced instance overrides named stops", () => {
+            const production = container({ 'adobe-alloy': alloy(overriding({ production: datasets('prod-events') })) });
+            const build = withRules([sendRule({ development: datasets('prod-events') })]);
+            expect(checkStageDestinations(build, production).problems).toEqual([OVERRIDE_DATASET(actionAt('Send', 0))]);
+        });
+
+        test("production's own problems aren't the test build's", () => {
+            const production = withRules([sendRule('%overrides%')], { 'adobe-alloy': alloy(instance('prod-datastream', '')), 'adobe-analytics': analytics({ development: [] }) });
+            expect(checkStageDestinations(withRules([]), production)).toEqual({ problems: [], unaware: [] });
         });
     });
 

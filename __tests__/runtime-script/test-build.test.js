@@ -528,6 +528,22 @@ describe('generateTestBuild', () => {
         expect(parseScript(script).container.rules.at(-1).actions[0].settings.edgeConfigOverrides.development).toEqual({ datastreamId: 'dev-other' });
     });
 
+    // Production keeps sending where its own script says while the test build is tried
+    test("stops and writes nothing when a library's Web SDK settings make production's datastream development's", async () => {
+        const settings = { instances: [{ name: 'alloy', edgeConfigId: 'new-datastream', developmentEdgeConfigId: 'prod-datastream' }] };
+        const extension = revision('extensions', 50, { name: 'adobe-alloy', display_name: 'adobe-alloy', settings: json(settings) }, reactorId('EX', 2));
+        // withAlloy's package
+        extension.relationships.extension_package.data.id = reactorId('EP', 2);
+        const library = { rules: [], data_elements: [], extensions: [extension], components: new Map() };
+        await download(library);
+
+        const error = await stopped(generate(launch({ ...withAlloy(), library })));
+        expect(error).toBeInstanceOf(TestBuildStop);
+        expect(error.problems).toEqual(["adobe-alloy instance 0: the development datastream is production's"]);
+        expect(fs.readdirSync(overridesDir)).toEqual([]);
+        expect(fs.existsSync(manifestFile())).toBe(false);
+    });
+
     test("warns which extensions don't choose a destination by stage", async () => {
         await download();
         const tags = withExtensions([{ name: 'tag-a', settings: {} }, { name: 'tag-b', settings: { id: 1 } }]);
