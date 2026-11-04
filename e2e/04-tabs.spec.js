@@ -265,8 +265,31 @@ test.describe('Developer Sync tab', () => {
         await win.locator('#property-list .prop-item', { hasText: 'Mock Property One' }).locator('input').check();
         await win.locator('#property-select-panel button.primary').click();
         await win.locator('.tab-btn', { hasText: 'Developer Sync' }).click();
-        await win.locator('#tab-sync button', { hasText: 'Browse' }).click();
+        await win.locator('#tab-sync button[onclick="selectSyncFolder()"]').click();
         await expect(win.locator('#sync-folder-path')).toHaveValue('C:/mock-sync');
+    }
+
+    const LIBRARY = 'Library 2.0 (development)';
+    // The library's name loses its dot, as sanitizeFolderName does
+    const LIBRARY_FOLDER = 'C:/mock-sync/Mock Property One - Library 20';
+
+    /** List the property's libraries and choose the one that isn't published. */
+    async function chooseLibrary(win) {
+        await win.locator('#tab-sync button', { hasText: 'Libraries' }).click();
+        await win.locator('#sync-library').selectOption({ label: LIBRARY });
+    }
+
+    /** Pick the overrides folder under Test Build. */
+    async function browseOverrides(win) {
+        await win.locator('#tab-sync button[onclick="selectOverridesFolder()"]').click();
+        await expect(win.locator('#test-build-overrides-path')).toHaveValue('C:/mock-sync');
+    }
+
+    /** Tick or untick a property in the header's property list. */
+    async function setProperty(win, name, checked) {
+        await win.locator('button.icon-btn[title="Select Properties"]').click();
+        await win.locator('#property-list .prop-item', { hasText: name }).locator('input').setChecked(checked);
+        await win.locator('#property-select-panel button.primary').click();
     }
 
     test('a status check lists each state, conflicts with their reason, and failed lists', async ({ mockedWindow }) => {
@@ -296,5 +319,148 @@ test.describe('Developer Sync tab', () => {
         await expect(log).toContainText('[x] rules/RL_OLD (Old Campaign)');
         await expect(log).toContainText('[~] data_elements/DE_CART (Cart)');
         await expect(log).toContainText('All downloads complete.');
+    });
+
+    test('Developer Sync generates a test build for a library', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await mockedWindow.locator('#tab-sync button', { hasText: 'Libraries' }).click();
+
+        // The published library isn't offered, and the environment list holds development environments only
+        const picker = mockedWindow.locator('#sync-library');
+        await expect(picker.locator('option')).toHaveText(['Whole property', LIBRARY]);
+        await expect(mockedWindow.locator('#test-build-environment option')).toHaveText(['Development']);
+        await picker.selectOption({ label: LIBRARY });
+
+        await browseOverrides(mockedWindow);
+        await mockedWindow.locator('#tab-sync button', { hasText: 'Generate' }).click();
+
+        const log = mockedWindow.locator('#sync-console');
+        await expect(log).toContainText('Replaced [1]');
+        await expect(log).toContainText('rule Click');
+        await expect(log).toContainText('Point Chrome DevTools → Sources → Overrides at C:/mock-sync (overrides apply only while DevTools is open).');
+
+        const sent = await electronApp.evaluate(() => globalThis.__lastTestBuildPayload);
+        expect(sent).toMatchObject({
+            targetDir: LIBRARY_FOLDER,
+            overridesDir: 'C:/mock-sync',
+            environmentId: 'EN_DEV',
+            token: 'mock-access-token-abc123'
+        });
+    });
+
+    test('a library is downloaded and checked in a folder of its own', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await chooseLibrary(mockedWindow);
+
+        await mockedWindow.locator('button', { hasText: 'Initialize' }).click();
+        await expect(mockedWindow.locator('#sync-console')).toContainText('✅ Downloaded 120 items.');
+        const download = await electronApp.evaluate(() => globalThis.__lastSyncDownloadPayload);
+        expect(download).toMatchObject({
+            property: { id: 'PR_MOCK_001', name: 'Mock Property One' },
+            library: { id: 'LB_002', name: 'Library 2.0' },
+            targetDir: LIBRARY_FOLDER
+        });
+
+        await mockedWindow.locator('button', { hasText: 'Check Status' }).click();
+        await expect(mockedWindow.locator('#sync-console')).toContainText('Files To Be Pushed (Modified) [1]');
+        const diff = await electronApp.evaluate(() => globalThis.__lastSyncDiffPayload);
+        expect(diff.targetDir).toBe(LIBRARY_FOLDER);
+
+        // Back to the whole property: today's folder, and no library
+        await mockedWindow.locator('#sync-library').selectOption('');
+        await mockedWindow.locator('button', { hasText: 'Initialize' }).click();
+        await expect.poll(() => electronApp.evaluate(() => globalThis.__lastSyncDownloadPayload.targetDir))
+            .toBe('C:/mock-sync/Mock Property One');
+        expect(await electronApp.evaluate(() => globalThis.__lastSyncDownloadPayload.library)).toBeNull();
+    });
+
+    test('Generate and Push say what they need, and do nothing', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        const log = mockedWindow.locator('#sync-console');
+        const generate = mockedWindow.locator('#tab-sync button', { hasText: 'Generate' });
+
+        await generate.click();
+        await expect(log).toContainText('Choose a library');
+
+        await chooseLibrary(mockedWindow);
+        await generate.click();
+        await expect(log).toContainText('Choose an overrides folder');
+
+        // Pushing a library's folder isn't offered. (The tab has no Push button.)
+        await mockedWindow.evaluate(() => window.pushToLaunch());
+        await expect(log).toContainText("Pushing a library sync isn't available yet");
+        await expect(log).not.toContainText('Starting Push');
+
+        expect(await electronApp.evaluate(() => globalThis.__lastTestBuildPayload)).toBeUndefined();
+    });
+
+    test('library actions need exactly one property, and that property\'s libraries', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await chooseLibrary(mockedWindow);
+        const log = mockedWindow.locator('#sync-console');
+        const downloadSent = () => electronApp.evaluate(() => globalThis.__lastSyncDownloadPayload);
+
+        // A second property joins the selection
+        await setProperty(mockedWindow, 'Mock Property Two', true);
+        await mockedWindow.locator('button', { hasText: 'Initialize' }).click();
+        await expect(log).toContainText('Downloading a library needs exactly one property');
+        await mockedWindow.locator('#tab-sync button', { hasText: 'Libraries' }).click();
+        await expect(log).toContainText('Listing libraries needs exactly one property');
+
+        // Only the second remains, and the list is the first's
+        await setProperty(mockedWindow, 'Mock Property One', false);
+        await mockedWindow.locator('button', { hasText: 'Initialize' }).click();
+        await expect(log).toContainText("belong to another property");
+
+        expect(await downloadSent()).toBeUndefined();
+    });
+
+    test('a test build lists what was added and dropped, its warnings, and what stopped it', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await chooseLibrary(mockedWindow);
+        await browseOverrides(mockedWindow);
+        const log = mockedWindow.locator('#sync-console');
+        const generate = mockedWindow.locator('#tab-sync button', { hasText: 'Generate' });
+        const returns = (result) => electronApp.evaluate(({ ipcMain }, result) => {
+            ipcMain.removeHandler('generate-test-build');
+            ipcMain.handle('generate-test-build', () => result);
+        }, result);
+
+        await returns({
+            report: {
+                replaced: [],
+                added: ['data element Cart'],
+                dropped: ['rule Old Campaign'],
+                warnings: ['rule Click: new or changed in Launch since the sync. Sync the library again.']
+            },
+            written: [],
+            removed: []
+        });
+        await generate.click();
+        await expect(log).toContainText('Added [1]');
+        await expect(log).toContainText('data element Cart');
+        await expect(log).toContainText('Dropped [1]');
+        await expect(log).toContainText('rule Old Campaign');
+        await expect(log).toContainText('⚠ Warnings [1]');
+        await expect(log).toContainText('rule Click: new or changed in Launch since the sync. Sync the library again.');
+        await expect(log).toContainText('Point Chrome DevTools');
+        await expect(log).not.toContainText('Replaced');
+
+        await returns({ stopped: true, problems: ['Production has no successful build yet', 'Check 3 failed'] });
+        await generate.click();
+        await expect(log).toContainText('⛔ Stopped [2]');
+        await expect(log).toContainText('Production has no successful build yet');
+        await expect(log).toContainText('Check 3 failed');
+        await expect(log).not.toContainText('Point Chrome DevTools');
+    });
+
+    test('the overrides folder is saved and restored', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await browseOverrides(mockedWindow);
+        await expect.poll(() => electronApp.evaluate(() => globalThis.__savedConfig.test_build_overrides_dir))
+            .toBe('C:/mock-sync');
+
+        await mockedWindow.reload();
+        await expect(mockedWindow.locator('#test-build-overrides-path')).toHaveValue('C:/mock-sync');
     });
 });

@@ -170,6 +170,21 @@
                     <input type="text" id="sync-folder-path" readonly placeholder="No folder selected..." style="margin-bottom:0;">
                     <button class="primary" style="width:auto;" onclick="selectSyncFolder()">Browse</button>
                 </div>
+                <label style="display:block; margin-top:15px;">Library</label>
+                <div style="display:flex; gap:10px;">
+                    <select id="sync-library" style="margin-bottom:0;">
+                        <option value="">Whole property</option>
+                    </select>
+                    <button class="primary" style="width:auto;" onclick="loadSyncLibraries()">Libraries</button>
+                </div>
+                <p style="font-size: 12px; color: var(--text-muted); margin: 5px 0 0;">
+                    Libraries lists the selected property's libraries that aren't published. A library downloads into a folder of its own.
+                </p>
+                <label style="display:block; margin-top:15px;">Test Build Development Environment</label>
+                <select id="test-build-environment" style="margin-bottom:0;"></select>
+                <p style="font-size: 12px; color: var(--text-muted); margin: 5px 0 0;">
+                    Used when the library has no development environment of its own.
+                </p>
             </div>
 
             <div style="background: var(--bg-card); padding: 20px; border-radius: 8px; border: 1px solid var(--border); margin-top: 20px;">
@@ -178,6 +193,19 @@
                     <button class="primary" onclick="initSyncDownload()">⬇️ Initialize (Download All)</button>
                     <button class="primary" style="background: #27ae60;" onclick="checkSyncStatus()">🔄 Check Status (Diff)</button>
                 </div>
+            </div>
+
+            <div style="background: var(--bg-card); padding: 20px; border-radius: 8px; border: 1px solid var(--border); margin-top: 20px;">
+                <h3 style="margin-top:0;">3. Test Build</h3>
+                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 15px;">
+                    Applies the chosen library, as downloaded in the folder above, to production's script and writes the result where Chrome's Local Overrides serves it.
+                </p>
+                <label style="display:block;">Overrides Folder</label>
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="test-build-overrides-path" readonly placeholder="No folder selected..." style="margin-bottom:0;">
+                    <button class="primary" style="width:auto;" onclick="selectOverridesFolder()">Browse</button>
+                </div>
+                <button class="primary" style="margin-top:15px;" onclick="generateTestBuild()">Generate</button>
             </div>
 
             <div style="margin-top: 20px;">
