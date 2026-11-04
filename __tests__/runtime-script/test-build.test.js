@@ -437,6 +437,17 @@ describe('generateTestBuild', () => {
         expect(parseScript(script).container.dataElements.Visitor.settings).toEqual({ path: 'visitor.local' });
     });
 
+    test('warns about library items taken out of the library in Launch since the sync', async () => {
+        await download(withVisitor(editedClick()));
+
+        // Launch no longer lists Visitor in the library
+        const { report } = await generate(launch({ library: editedClick() }));
+        expect(report.warnings).toEqual([
+            'data element Visitor: taken out of the library in Launch since the sync. Sync the library again.',
+            'Click: custom code kept inline; Launch would load it from a file'
+        ]);
+    });
+
     test("warns when the library couldn't be checked against Launch, and still builds", async () => {
         await download();
         const fakes = launch();
