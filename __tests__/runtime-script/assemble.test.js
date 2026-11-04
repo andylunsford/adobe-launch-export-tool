@@ -11,7 +11,7 @@ const FIXTURE = require('../fixtures/runtime-script/launch-fixture');
 const { PACKAGE, PRODUCTION, revision, component, reactorId } = require('../fixtures/runtime-script/fixture-data');
 
 const parsed = parseScript(FIXTURE);
-const production = { container: parsed.container, revisions: PRODUCTION.revisions, buildBaseUrl: PRODUCTION.buildBaseUrl };
+const production = { container: parsed.container, revisions: PRODUCTION.revisions, components: PRODUCTION.components, buildBaseUrl: PRODUCTION.buildBaseUrl };
 const packages = new Map([[PACKAGE.id, PACKAGE]]);
 const NOW = new Date('2026-11-03T12:00:00.123Z');
 const NOTHING_TO_APPLY = "Nothing to apply: the test build is production's script on the development environment";
@@ -42,13 +42,16 @@ function stopped(run) {
 const [loadRule, clickRule] = PRODUCTION.revisions.rules;
 const clickComponents = PRODUCTION.components.get(clickRule.id);
 
-/** A library revision of Click (origin RL…02), with its custom code action changed. */
-function editedClick(n) {
-    const action = component(28, {
-        delegate_descriptor_id: 'core::actions::custom-code', order: 2, delay_next: true, timeout: 2000, settings: customCode('console.log("changed");')
-    });
-    return { revision: revision('rules', n, { name: 'Click' }, reactorId('RL', 2)), components: [...clickComponents.slice(0, 2), action] };
+/** A new library revision of Click (origin RL…02), with new component revisions and this custom code. */
+function freshClick(n, code = 'console.log("external");') {
+    const [event, condition, action] = clickComponents;
+    return {
+        revision: revision('rules', n, { name: 'Click' }, reactorId('RL', 2)),
+        components: [component(26, event.attributes), component(27, condition.attributes), component(28, { ...action.attributes, settings: customCode(code) })]
+    };
 }
+/** A new library revision of Click, with its custom code action changed. */
+const editedClick = (n) => freshClick(n, 'console.log("changed");');
 
 // The core package with delegates production's script doesn't load
 const NOT_LOADED = {
@@ -201,6 +204,64 @@ describe('assembleTestBuild', () => {
         const revisions = { ...PRODUCTION.revisions, data_elements: PRODUCTION.revisions.data_elements.slice(1) };
         expect(() => assemble({}, { production: { ...production, revisions } })).toThrow('data element Page Title: no production revision');
     });
+
+    test('a new rule revision that does what production\'s does isn\'t replaced, whatever its ids', () => {
+        const inline = assemble({ rules: [freshClick(13)] });
+        expect(inline.report).toEqual({
+            replaced: [], added: [], dropped: [],
+            warnings: ['Click: custom code kept inline; Launch would load it from a file', NOTHING_TO_APPLY]
+        });
+
+        // The entry loads the code from a file named by the new component revision id
+        const moved = assemble({ rules: [freshClick(13)] }, { inlineMovedCode: false });
+        expect(moved.container.rules[1].actions[0].settings.source).toBe(`${PRODUCTION.buildBaseUrl}${reactorId('RC', 28)}-source.js`);
+        expect(moved.report).toEqual({ replaced: [], added: [], dropped: [], warnings: [NOTHING_TO_APPLY] });
+    });
+
+    test('a new rule revision with its custom code edited is replaced, whether the code is inline or moved', () => {
+        expect(assemble({ rules: [editedClick(13)] }).report.replaced).toEqual(['rule Click']);
+        expect(assemble({ rules: [editedClick(13)] }, { inlineMovedCode: false }).report.replaced).toEqual(['rule Click']);
+    });
+
+    test('a rule whose production components aren\'t known counts as changed', () => {
+        const components = new Map([[loadRule.id, PRODUCTION.components.get(loadRule.id)]]);
+        const { report } = assemble({ rules: [freshClick(13)] }, { production: { ...production, components } });
+        expect(report.replaced).toEqual(['rule Click']);
+    });
+
+    test('two library revisions of one item stop', () => {
+        const siteSection = (n, name) => ({
+            revision: revision('data_elements', n, {
+                name, delegate_descriptor_id: 'core::dataElements::javascript-variable', settings: json({ path: 'site.section' })
+            }, reactorId('DE', 2))
+        });
+        const error = stopped(() => assemble({ data_elements: [siteSection(34, 'Section'), siteSection(33, 'Site Section')] }));
+        expect(error).toBeInstanceOf(TestBuildStop);
+        expect(error.problems).toEqual([
+            'data element Site Section: the sync folder holds more than one revision of it (DE00000000000000000000000000000033, DE00000000000000000000000000000034); delete all but one'
+        ]);
+    });
+
+    test('a library data element renamed onto a name production keeps stops', () => {
+        const renamed = revision('data_elements', 34, {
+            name: 'Page Title', delegate_descriptor_id: 'core::dataElements::javascript-variable', settings: json({ path: 'site.section' })
+        }, reactorId('DE', 2));
+        const error = stopped(() => assemble({ data_elements: [{ revision: renamed }] }));
+        expect(error).toBeInstanceOf(TestBuildStop);
+        expect(error.problems).toEqual(['data element Page Title: another data element already has this name']);
+    });
+
+    test('extensions stay in revision id order', () => {
+        // Production with a second extension, after core
+        const container = structuredClone(parsed.container);
+        container.extensions.tools = { displayName: 'Tools', hostedLibFilesBaseUrl: `https://assets.adobedtm.com/extensions/${reactorId('EP', 2)}/`, modules: {} };
+        const tools = revision('extensions', 42, { name: 'tools', display_name: 'Tools' }, reactorId('EX', 2));
+        const withTools = { ...production, container, revisions: { ...PRODUCTION.revisions, extensions: [...PRODUCTION.revisions.extensions, tools] } };
+
+        const core = revision('extensions', 45, { name: 'core', display_name: 'Core' }, reactorId('EX', 1));
+        const { container: built } = assemble({ extensions: [{ revision: core }] }, { production: withTools });
+        expect(Object.keys(built.extensions)).toEqual(['tools', 'core']);
+    });
 });
 
 describe('with a library sync folder', () => {
@@ -278,6 +339,19 @@ describe('with a library sync folder', () => {
         expect(rules[0].components.map(c => c.id)).toEqual([reactorId('RC', 22), reactorId('RC', 24)]);
         expect(warnings).toEqual([
             "rule component Checkout Path (RC00000000000000000000000000000025) left out: the download record doesn't say which rule it belongs to"
+        ]);
+    });
+
+    test('readLibraryItems warns about a component whose rule revision it didn\'t read', async () => {
+        const path25 = component(25, { ...clickComponents[1].attributes, name: 'Checkout Path' });
+        await download({ rules: [loadRule, clickRule], components: new Map([[loadRule.id, []], [clickRule.id, [path25]]]) });
+        // Taken out of the library: the rule's folder is gone, its component's isn't
+        fs.rmSync(folderOf('rules', clickRule.id), { recursive: true });
+
+        const { rules, warnings } = await readLibraryItems(dir, fetchPkg);
+        expect(rules.map(r => r.revision.id)).toEqual([loadRule.id]);
+        expect(warnings).toEqual([
+            "rule component Checkout Path (RC00000000000000000000000000000025) left out: its rule revision RL00000000000000000000000000000012 isn't in the sync folder"
         ]);
     });
 
