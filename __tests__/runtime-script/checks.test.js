@@ -95,6 +95,17 @@ describe('checkProductionEntries', () => {
         expect(run({ container })).toEqual(['data_elements Site Section: differs from production at (printed text)']);
     });
 
+    test("an entry whose package has a transform the writers can't apply is a problem, not a crash", () => {
+        const fileTransform = {
+            ...PACKAGE,
+            attributes: { ...PACKAGE.attributes, actions: PACKAGE.attributes.actions.map(def => ({ ...def, transforms: [{ type: 'file', propertyPath: 'source' }] })) }
+        };
+        expect(run({ packages: new Map([[PACKAGE.id, fileTransform]]) })).toEqual([
+            "rules Load: file transform on source isn't supported",
+            "rules Click: file transform on source isn't supported"
+        ]);
+    });
+
     test('an extension package that is missing is an error naming the revision', () => {
         expect(() => run({ packages: new Map() })).toThrow(`${PRODUCTION.revisions.data_elements[0].id} needs extension package ${PACKAGE.id}, which isn't in the packages`);
     });

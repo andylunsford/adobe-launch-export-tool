@@ -314,8 +314,49 @@ describe('writeOverrides', () => {
             expect(read(path.join(overridesDir, 'relative.js'))).toBe('keep me');
         });
 
+        test('removes only .js files under the hosts this tool writes to', () => {
+            const kept = [
+                path.join(overridesDir, 'notes.txt'),
+                path.join(overridesDir, 'other-host', 'x.js'),
+                path.join(overridesDir, 'loose.js'),
+                onDisk('notes.txt'),
+                onDisk('launch.js.txt')
+            ];
+            for (const file of kept) {
+                fs.mkdirSync(path.dirname(file), { recursive: true });
+                fs.writeFileSync(file, 'keep me');
+            }
+            previously(syncA, kept);
+
+            const { removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
+
+            expect(removed).toEqual([]);
+            for (const file of kept) expect(read(file)).toBe('keep me');
+        });
+
+        test('removes .js files under assets.adobedtm.com and under the host of any URL this run writes', () => {
+            const SELF_HOSTED = 'https://cdn.example.test/launch';
+            write(syncA, {
+                scriptUrls: [`${SELF_HOSTED}/launch.min.js`, `${SELF_HOSTED}/launch.js`, PRODUCTION.debug],
+                files: [{ url: 'https://code.example.test/RC1111.js', text: 'old code' }]
+            });
+
+            // Nothing this run writes is on assets.adobedtm.com
+            const { removed } = write(syncA, {
+                scriptUrls: [`${SELF_HOSTED}/launch.js`],
+                files: [{ url: 'https://code.example.test/RC2222.js', text: 'new code' }]
+            });
+
+            expect(removed).toEqual([
+                path.join(overridesDir, 'cdn.example.test', 'launch', 'launch.min.js'),
+                onDisk('launch-a1b2c3d4e5f6.js'),
+                path.join(overridesDir, 'code.example.test', 'RC1111.js')
+            ]);
+        });
+
         test('never removes a folder', () => {
-            const folder = onDisk('rule-code');
+            // Named like a file this tool writes, so only its being a folder keeps it
+            const folder = onDisk('rule-code.js');
             fs.mkdirSync(folder, { recursive: true });
             fs.writeFileSync(path.join(folder, 'inside.js'), 'keep me');
             previously(syncA, [folder]);
@@ -391,10 +432,12 @@ describe('writeOverrides', () => {
             const elsewhere = path.join(dir, 'elsewhere');
             fs.mkdirSync(elsewhere);
             fs.writeFileSync(path.join(elsewhere, 'victim.js'), 'keep me');
-            fs.mkdirSync(overridesDir);
-            if (!link(elsewhere, path.join(overridesDir, 'linked'))) return;
+            // Under a host this tool writes to, so only the link keeps it
+            const host = path.join(overridesDir, 'assets.adobedtm.com');
+            fs.mkdirSync(host, { recursive: true });
+            if (!link(elsewhere, path.join(host, 'linked'))) return;
             fs.mkdirSync(path.join(syncA, '.reactor-sync'), { recursive: true });
-            fs.writeFileSync(path.join(syncA, '.reactor-sync', 'test-build.json'), JSON.stringify({ files: [path.join(overridesDir, 'linked', 'victim.js')] }));
+            fs.writeFileSync(path.join(syncA, '.reactor-sync', 'test-build.json'), JSON.stringify({ files: [path.join(host, 'linked', 'victim.js')] }));
 
             const { removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
 

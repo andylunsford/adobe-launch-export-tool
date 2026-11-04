@@ -136,6 +136,48 @@ describe('assembleTestBuild', () => {
         expect(error.problems).toEqual(["rule Click: core/src/lib/events/click.js isn't loaded by production"]);
     });
 
+    test("library items whose delegates have a transform the writers can't apply stop", () => {
+        // The core package with a file transform on custom code
+        const toFile = (def) => (/custom-code$/.test(def.id) ? { ...def, transforms: [{ type: 'file', propertyPath: 'source' }] } : def);
+        const fileTransform = {
+            ...PACKAGE,
+            attributes: { ...PACKAGE.attributes, data_elements: PACKAGE.attributes.data_elements.map(toFile), actions: PACKAGE.attributes.actions.map(toFile) }
+        };
+        const script = revision('data_elements', 35, {
+            name: 'Script', delegate_descriptor_id: 'core::dataElements::custom-code', settings: json({ source: 'return 1;' })
+        }, reactorId('DE', 9));
+
+        const error = stopped(() => assemble({ rules: [editedClick(13)], data_elements: [{ revision: script }] }, { packages: new Map([[PACKAGE.id, fileTransform]]) }));
+        expect(error).toBeInstanceOf(TestBuildStop);
+        expect(error.problems).toEqual([
+            "data element Script: file transform on source isn't supported",
+            "rule Click: file transform on source isn't supported"
+        ]);
+    });
+
+    test("library items with no origin stop: they aren't library revisions", () => {
+        const withoutOrigin = (item) => {
+            delete item.revision.relationships.origin;
+            return item;
+        };
+        const visitor = withoutOrigin({
+            revision: revision('data_elements', 35, {
+                name: 'Visitor', delegate_descriptor_id: 'core::dataElements::javascript-variable', settings: json({ path: 'visitor.id' })
+            }, reactorId('DE', 9))
+        });
+        // Two of them, which have no origin to share
+        const click = withoutOrigin(editedClick(13));
+        const other = withoutOrigin({ ...freshClick(14), revision: revision('rules', 14, { name: 'Other' }, reactorId('RL', 3)) });
+
+        const error = stopped(() => assemble({ rules: [click, other], data_elements: [visitor] }));
+        expect(error).toBeInstanceOf(TestBuildStop);
+        expect(error.problems).toEqual([
+            "data element Visitor: has no origin, so it isn't a library revision",
+            "rule Click: has no origin, so it isn't a library revision",
+            "rule Other: has no origin, so it isn't a library revision"
+        ]);
+    });
+
     test('an extension on another package version stops', () => {
         const core = revision('extensions', 43, { name: 'core', display_name: 'Core' }, reactorId('EX', 1));
         core.relationships.extension_package.data.id = reactorId('EP', 2);

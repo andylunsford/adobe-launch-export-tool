@@ -7,6 +7,7 @@ const {
     PREFIX, parseScript, printScript, extensionEntry, urlToPath, generateTestBuild, TestBuildStop
 } = require('../../lib/reactor-core/runtime-script');
 const { writeDownload, bindFolder } = require('../../lib/reactor-core/sync');
+const assemble = require('../../lib/reactor-core/runtime-script/assemble');
 const FIXTURE = require('../fixtures/runtime-script/launch-fixture');
 const { PACKAGE, PRODUCTION, revision, component, reactorId } = require('../fixtures/runtime-script/fixture-data');
 
@@ -559,6 +560,31 @@ describe('generateTestBuild', () => {
         expect(error).toBeInstanceOf(TestBuildStop);
         expect(error.problems).toEqual(['Pick a development environment for this library']);
         expect(fs.readdirSync(overridesDir)).toEqual([]);
+    });
+
+    // The assembler sets the development environment; this holds even if it didn't
+    test.each([
+        ["production's environment", { id: PRODUCTION_ENV, stage: 'production' }],
+        ['a staging environment labelled development', { id: STAGING_ENV, stage: 'development' }],
+        ['a development environment labelled production', { id: DEVELOPMENT_ENV, stage: 'production' }]
+    ])("stops and writes nothing when the build is set to %s", async (_, environment) => {
+        await download();
+        const assembleTestBuild = assemble.assembleTestBuild;
+        const spy = jest.spyOn(assemble, 'assembleTestBuild').mockImplementation((input) => {
+            const built = assembleTestBuild(input);
+            built.container.environment = environment;
+            return built;
+        });
+        try {
+            const error = await stopped(generate(launch()));
+            expect(spy).toHaveBeenCalledTimes(1);
+            expect(error).toBeInstanceOf(TestBuildStop);
+            expect(error.problems).toEqual(["The test build isn't set to a development environment"]);
+            expect(fs.readdirSync(overridesDir)).toEqual([]);
+            expect(fs.existsSync(manifestFile())).toBe(false);
+        } finally {
+            spy.mockRestore();
+        }
     });
 
     test("adds the overrides folder's warnings to the report", async () => {

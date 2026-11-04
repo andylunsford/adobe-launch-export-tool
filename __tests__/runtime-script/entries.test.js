@@ -1,6 +1,8 @@
 'use strict';
 
-const { parseScript, printValue, dataElementEntry, extensionEntry, ruleEntry, applyTransforms, byRevisionId } = require('../../lib/reactor-core/runtime-script');
+const {
+    parseScript, printValue, dataElementEntry, extensionEntry, ruleEntry, applyTransforms, byRevisionId, UnsupportedTransform
+} = require('../../lib/reactor-core/runtime-script');
 const FIXTURE = require('../fixtures/runtime-script/launch-fixture');
 const { PACKAGE, PRODUCTION, revision, component } = require('../fixtures/runtime-script/fixture-data');
 
@@ -64,6 +66,21 @@ test('transforms: remove deletes, add originId sets, [] expands', () => {
     expect(settings.sandbox).toBeUndefined();
     expect(settings.id).toBe('DE1');
     expect(settings.instances[0].cb.$function).toBe(true);
+});
+
+test("a transform type the writers can't apply is an error where the settings hold a value for it", () => {
+    expect(() => applyTransforms({ source: 'code' }, [{ type: 'file', propertyPath: 'source' }])).toThrow(UnsupportedTransform);
+    expect(() => applyTransforms({ source: 'code' }, [{ type: 'file', propertyPath: 'source' }])).toThrow("file transform on source isn't supported");
+    expect(() => applyTransforms({ list: [{ code: 'x' }] }, [{ type: 'file', propertyPath: 'list[].code' }])).toThrow("file transform on list.0.code isn't supported");
+    expect(() => applyTransforms({ source: null }, [{ type: 'mystery', propertyPath: 'source' }])).toThrow("mystery transform on source isn't supported");
+    // With nothing there, there is nothing it would change
+    expect(applyTransforms({ other: 1 }, [{ type: 'file', propertyPath: 'source' }])).toEqual({ other: 1 });
+    expect(applyTransforms({ other: 1 }, [{ type: 'file', propertyPath: 'list[].code' }])).toEqual({ other: 1 });
+});
+
+test('an add transform for anything but the origin id is an error', () => {
+    expect(() => applyTransforms({}, [{ type: 'add', propertyPath: 'id', reservedKey: 'propertyId' }], { originId: 'DE1' }))
+        .toThrow("add transform on id isn't supported");
 });
 
 test('byRevisionId is code-unit order', () => {
