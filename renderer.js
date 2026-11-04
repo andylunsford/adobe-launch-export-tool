@@ -72,8 +72,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             compare.populateComparisonProperties();
         }
 
-        // Developer Sync Tab Initialization: the overrides folder chosen last time, the first time it is shown
+        // Developer Sync Tab Initialization: the selected properties, and the overrides folder chosen last time, the first time it is shown
         if (tabId === 'tab-sync') {
+            sync.populateSyncProperties();
             sync.restoreOverridesFolder();
         }
     };

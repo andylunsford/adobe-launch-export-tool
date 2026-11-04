@@ -190,8 +190,11 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
         ipcMain.handle('resume-archive-run', () => ({ success: true }));
         ipcMain.handle('select-folder', () => 'C:/mock-sync');
         // Each keeps the last payload so a test can check which folder and library the renderer sent.
+        // Downloads keep every payload too, as one click can download several properties.
+        globalThis.__syncDownloadPayloads = [];
         ipcMain.handle('perform-sync-download', (_event, payload) => {
             globalThis.__lastSyncDownloadPayload = payload;
+            globalThis.__syncDownloadPayloads.push(payload);
             return data.syncDownload;
         });
         ipcMain.handle('perform-sync-diff', (_event, payload) => {

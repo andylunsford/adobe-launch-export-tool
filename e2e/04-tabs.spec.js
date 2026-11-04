@@ -38,6 +38,7 @@ test.describe('Tab navigation', () => {
         await setupMainInterface(mockedWindow);
         await mockedWindow.locator('.tab-btn', { hasText: 'Developer Sync' }).click();
         await expect(mockedWindow.locator('#tab-sync')).toHaveClass(/active/);
+        await expect(mockedWindow.locator('#sync-prop-select')).toBeVisible();
         await expect(mockedWindow.locator('#sync-folder-path')).toBeVisible();
         await expect(mockedWindow.locator('#sync-console')).toBeVisible();
     });
@@ -273,9 +274,12 @@ test.describe('Developer Sync tab', () => {
     // The library's name loses its dot, as sanitizeFolderName does
     const LIBRARY_FOLDER = 'C:/mock-sync/Mock Property One - Library 20';
 
+    /** The button that lists the chosen property's unpublished libraries. */
+    const fetchLibraries = (win) => win.locator('#tab-sync button', { hasText: 'Fetch Unpublished Libraries' });
+
     /** List the property's libraries and choose the one that isn't published. */
     async function chooseLibrary(win) {
-        await win.locator('#tab-sync button', { hasText: 'Libraries' }).click();
+        await fetchLibraries(win).click();
         await win.locator('#sync-library').selectOption({ label: LIBRARY });
     }
 
@@ -323,7 +327,7 @@ test.describe('Developer Sync tab', () => {
 
     test('Developer Sync generates a test build for a library', async ({ electronApp, mockedWindow }) => {
         await openSyncWithProperty(mockedWindow);
-        await mockedWindow.locator('#tab-sync button', { hasText: 'Libraries' }).click();
+        await fetchLibraries(mockedWindow).click();
 
         // The published library isn't offered, and the environment list holds development environments only
         const picker = mockedWindow.locator('#sync-library');
@@ -396,25 +400,79 @@ test.describe('Developer Sync tab', () => {
         expect(await electronApp.evaluate(() => globalThis.__lastTestBuildPayload)).toBeUndefined();
     });
 
-    test('library actions need exactly one property, and that property\'s libraries', async ({ electronApp, mockedWindow }) => {
-        await openSyncWithProperty(mockedWindow);
-        await chooseLibrary(mockedWindow);
-        const log = mockedWindow.locator('#sync-console');
-        const downloadSent = () => electronApp.evaluate(() => globalThis.__lastSyncDownloadPayload);
+    test('the property picker lists the header\'s properties, and keeps the one chosen', async ({ mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('.tab-btn', { hasText: 'Developer Sync' }).click();
+        const picker = mockedWindow.locator('#sync-prop-select');
+        await expect(picker.locator('option')).toHaveText(['Select Properties Globally First']);
 
-        // A second property joins the selection
+        // One property is the one chosen
+        await setProperty(mockedWindow, 'Mock Property One', true);
+        await expect(picker.locator('option')).toHaveText(['Mock Property One']);
+        await expect(picker).toHaveValue('PR_MOCK_001');
+
+        // A second joins: all of them can be chosen, and the first stays chosen. The
+        // properties are grouped by platform, so Two (Event Forwarding) comes first.
         await setProperty(mockedWindow, 'Mock Property Two', true);
-        await mockedWindow.locator('button', { hasText: 'Initialize' }).click();
-        await expect(log).toContainText('Downloading a library needs exactly one property');
-        await mockedWindow.locator('#tab-sync button', { hasText: 'Libraries' }).click();
-        await expect(log).toContainText('Listing libraries needs exactly one property');
+        await expect(picker.locator('option')).toHaveText(['All selected properties', 'Mock Property Two', 'Mock Property One']);
+        await expect(picker).toHaveValue('PR_MOCK_001');
+    });
 
-        // Only the second remains, and the list is the first's
+    test('Fetch Unpublished Libraries comes before the library list', async ({ mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        const button = await fetchLibraries(mockedWindow).boundingBox();
+        const list = await mockedWindow.locator('#sync-library').boundingBox();
+        expect(button.x + button.width).toBeLessThanOrEqual(list.x);
+    });
+
+    test('library actions work on the property chosen, and its libraries only', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await setProperty(mockedWindow, 'Mock Property Two', true);
+        const picker = mockedWindow.locator('#sync-prop-select');
+        const libraries = mockedWindow.locator('#sync-library option');
+        const environments = mockedWindow.locator('#test-build-environment option');
+        const log = mockedWindow.locator('#sync-console');
+
+        // Two are selected, and the one chosen has its library downloaded
+        await chooseLibrary(mockedWindow);
+        await mockedWindow.locator('button', { hasText: 'Initialize' }).click();
+        await expect(log).toContainText('✅ Downloaded 120 items.');
+        expect(await electronApp.evaluate(() => globalThis.__syncDownloadPayloads)).toEqual([
+            expect.objectContaining({ property: { id: 'PR_MOCK_001', name: 'Mock Property One' }, library: { id: 'LB_002', name: 'Library 2.0' } })
+        ]);
+
+        // The list is that property's: choosing another empties it, environments too
+        await picker.selectOption('PR_MOCK_002');
+        await expect(libraries).toHaveText(['Whole property']);
+        await expect(environments).toHaveCount(0);
+
+        // A library is one property's, so with all of them chosen none are fetched
+        await picker.selectOption('');
+        await fetchLibraries(mockedWindow).click();
+        await expect(log).toContainText('Fetching libraries needs one property. Choose it under Select Property.');
+        await expect(libraries).toHaveText(['Whole property']);
+
+        // Unticking the chosen property in the header empties the list too
+        await picker.selectOption('PR_MOCK_001');
+        await chooseLibrary(mockedWindow);
         await setProperty(mockedWindow, 'Mock Property One', false);
-        await mockedWindow.locator('button', { hasText: 'Initialize' }).click();
-        await expect(log).toContainText("belong to another property");
+        await expect(picker).toHaveValue('PR_MOCK_002');
+        await expect(libraries).toHaveText(['Whole property']);
+    });
 
-        expect(await downloadSent()).toBeUndefined();
+    test('whole-property actions work on the property chosen, or on every one selected', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await setProperty(mockedWindow, 'Mock Property Two', true);
+        const downloaded = () => electronApp.evaluate(() => globalThis.__syncDownloadPayloads.map(payload => payload.targetDir));
+        const initialize = mockedWindow.locator('button', { hasText: 'Initialize' });
+
+        await initialize.click();
+        await expect.poll(downloaded).toEqual(['C:/mock-sync/Mock Property One']);
+
+        await mockedWindow.locator('#sync-prop-select').selectOption('');
+        await initialize.click();
+        await expect.poll(downloaded).toHaveLength(3);
+        expect((await downloaded()).slice(1).sort()).toEqual(['C:/mock-sync/Mock Property One', 'C:/mock-sync/Mock Property Two']);
     });
 
     test('a test build lists what was added and dropped, its warnings, and what stopped it', async ({ electronApp, mockedWindow }) => {
@@ -512,13 +570,16 @@ test.describe('Developer Sync tab', () => {
         await expect.poll(calls).toBe(2);
     });
 
-    test('Check Status with a library needs exactly one property', async ({ electronApp, mockedWindow }) => {
+    test('Check Status with a library checks the chosen property\'s library, whatever else is selected', async ({ electronApp, mockedWindow }) => {
         await openSyncWithProperty(mockedWindow);
         await chooseLibrary(mockedWindow);
         await setProperty(mockedWindow, 'Mock Property Two', true);
 
         await mockedWindow.locator('button', { hasText: 'Check Status' }).click();
-        await expect(mockedWindow.locator('#sync-console')).toContainText('Checking a library needs exactly one property selected.');
-        expect(await electronApp.evaluate(() => globalThis.__lastSyncDiffPayload)).toBeUndefined();
+        await expect(mockedWindow.locator('#sync-console')).toContainText('Files To Be Pushed (Modified) [1]');
+        expect(await electronApp.evaluate(() => globalThis.__lastSyncDiffPayload)).toMatchObject({
+            property: { id: 'PR_MOCK_001' },
+            targetDir: LIBRARY_FOLDER
+        });
     });
 });
