@@ -15,6 +15,7 @@ const T = '2026-11-03T00:00:00.000Z';
 const PROPERTY = reactorId('PR', 1);
 const LIBRARY = reactorId('LB', 1);
 const BUILD = reactorId('BL', 1);
+const STAGING_ENV = reactorId('EN', 2);
 const PRODUCTION_ENV = reactorId('EN', 3);
 const DEVELOPMENT_ENV = reactorId('EN', 1);
 const OTHER_DEVELOPMENT_ENV = reactorId('EN', 4);
@@ -233,6 +234,21 @@ describe('generateTestBuild', () => {
         expect(JSON.parse(fs.readFileSync(cacheFile('revisions.json'), 'utf8')).revisions.rules).toHaveLength(2);
     });
 
+    test('fetches the revisions again when the saved ones lack the components of a production rule', async () => {
+        await download();
+        const fakes = launch();
+        await generate(fakes);
+        const requests = buildRequests(fakes);
+        const saved = JSON.parse(fs.readFileSync(cacheFile('revisions.json'), 'utf8'));
+        saved.components = saved.components.filter(([ruleId]) => ruleId !== PRODUCTION.revisions.rules[0].id);
+        fs.writeFileSync(cacheFile('revisions.json'), json(saved));
+
+        await generate(fakes);
+        expect(buildRequests(fakes)).toBe(requests * 2);
+        const healed = JSON.parse(fs.readFileSync(cacheFile('revisions.json'), 'utf8'));
+        expect(healed.components.map(([ruleId]) => ruleId)).toEqual(PRODUCTION.revisions.rules.map(rule => rule.id));
+    });
+
     test('stops when production has no build', async () => {
         await download();
         const fakes = launch({ build: null });
@@ -313,6 +329,37 @@ describe('generateTestBuild', () => {
         expect(fs.readFileSync(cacheFile('script.js'), 'utf8')).toBe(FIXTURE);
     });
 
+    describe('with a saved script that is cut short', () => {
+        const saveCutShort = () => {
+            fs.mkdirSync(path.dirname(cacheFile('script.js')), { recursive: true });
+            fs.writeFileSync(cacheFile('script.js'), FIXTURE.slice(0, 500));
+        };
+
+        test('downloads it again, once, and keeps the new one', async () => {
+            await download();
+            saveCutShort();
+            const fakes = launch();
+
+            const { report } = await generate(fakes);
+            expect(fakes.getText.mock.calls).toEqual([[DEBUG_SCRIPT_URL]]);
+            expect(fs.readFileSync(cacheFile('script.js'), 'utf8')).toBe(FIXTURE);
+            expect(report.replaced).toEqual(['rule Click']);
+        });
+
+        test("stops, and keeps nothing, when the download isn't a script either", async () => {
+            await download();
+            saveCutShort();
+            const fakes = launch({ script: '<html>Blocked by the proxy</html>' });
+
+            const error = await stopped(generate(fakes));
+            expect(error).toBeInstanceOf(TestBuildStop);
+            expect(error.problems).toEqual(['Not a Launch debug script: it does not start with the container assignment']);
+            expect(fakes.getText).toHaveBeenCalledTimes(1);
+            expect(fs.existsSync(cacheFile('script.js'))).toBe(false);
+            expect(fs.readdirSync(overridesDir)).toEqual([]);
+        });
+    });
+
     test("stops when the script isn't a Launch script", async () => {
         await download();
         const error = await stopped(generate(launch({ script: '<html>Access denied</html>' })));
@@ -368,6 +415,24 @@ describe('generateTestBuild', () => {
         expect(parseScript(script).container.dataElements.Visitor.settings).toEqual({ path: 'visitor.local' });
     });
 
+    test("warns when the library couldn't be checked against Launch, and still builds", async () => {
+        await download();
+        const fakes = launch();
+        const listed = fakes.get.getMockImplementation();
+        fakes.get.mockImplementation(async (url) => {
+            if (url.includes(`/libraries/${LIBRARY}/data_elements`)) throw new Error('Request failed with status code 503');
+            return listed(url);
+        });
+
+        const { report } = await generate(fakes);
+        expect(report.warnings).toEqual([
+            "Couldn't check the library against Launch: Couldn't list data_elements: Request failed with status code 503. Sync the library again.",
+            'Click: custom code kept inline; Launch would load it from a file'
+        ]);
+        expect(report.replaced).toEqual(['rule Click']);
+        expect(fs.existsSync(manifestFile())).toBe(true);
+    });
+
     test('stops when a stage-aware extension has no development destination', async () => {
         await download();
         const alloy = withExtensions([{ name: 'adobe-alloy', settings: { instances: [{ edgeConfigId: 'prod-datastream', developmentEdgeConfigId: '' }] } }]);
@@ -415,6 +480,28 @@ describe('generateTestBuild', () => {
     test('stops when neither the library nor the caller names an environment', async () => {
         await download();
         const error = await stopped(generate(launch({ libraryEnvironment: null })));
+        expect(error).toBeInstanceOf(TestBuildStop);
+        expect(error.problems).toEqual(['Pick a development environment for this library']);
+        expect(fs.readdirSync(overridesDir)).toEqual([]);
+    });
+
+    // The assembler writes the development stage whatever id it is given, so the id has to be a development environment's
+    test("uses environmentId when the library's environment isn't a development environment", async () => {
+        await download();
+        await generate(launch({ libraryEnvironment: STAGING_ENV }), { environmentId: OTHER_DEVELOPMENT_ENV });
+        const script = fs.readFileSync(urlToPath(overridesDir, PRODUCTION_DEBUG_URL), 'utf8');
+        expect(parseScript(script).container.environment).toEqual({ id: OTHER_DEVELOPMENT_ENV, stage: 'development' });
+    });
+
+    test.each([
+        ['an environmentId that is a staging environment', null, STAGING_ENV],
+        ['an environmentId that is the production environment', null, PRODUCTION_ENV],
+        ['an environmentId that isn\'t one of the property\'s environments', null, reactorId('EN', 9)],
+        ['a library environment that is a staging environment, and no environmentId', STAGING_ENV, undefined],
+        ['a staging environment as both', STAGING_ENV, STAGING_ENV]
+    ])('stops with %s', async (_, libraryEnvironment, environmentId) => {
+        await download();
+        const error = await stopped(generate(launch({ libraryEnvironment }), { environmentId }));
         expect(error).toBeInstanceOf(TestBuildStop);
         expect(error.problems).toEqual(['Pick a development environment for this library']);
         expect(fs.readdirSync(overridesDir)).toEqual([]);
