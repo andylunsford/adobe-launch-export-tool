@@ -70,6 +70,16 @@ describe('scriptUrls', () => {
         const environments = [environment('production', [{ minified: PRODUCTION.minified }])];
         expect(scriptUrls(environments)).toEqual([PRODUCTION.minified]);
     });
+
+    test('skips a missing environment, source and attributes', () => {
+        const environments = [
+            null,
+            undefined,
+            { id: 'EN1' },
+            { attributes: null, meta: { script_sources: [null, { debug: PRODUCTION.debug }] } }
+        ];
+        expect(scriptUrls(environments)).toEqual([PRODUCTION.debug]);
+    });
 });
 
 describe('urlToPath', () => {
@@ -90,16 +100,22 @@ describe('longPath', () => {
         return path.join(base, 'x'.repeat(length - base.length - 1));
     };
 
-    test('leaves a path under 260 characters alone', () => {
-        const p = pathOfLength(259);
-        expect(p).toHaveLength(259);
+    // 248 is the longest directory path Windows takes without the prefix, less one
+    test('leaves a path under 248 characters alone', () => {
+        const p = pathOfLength(247);
+        expect(p).toHaveLength(247);
         expect(longPath(p)).toBe(p);
     });
 
-    test('prefixes a path of 260 characters or more on Windows only', () => {
-        const p = pathOfLength(260);
-        expect(p).toHaveLength(260);
+    test('prefixes a path of 248 characters or more on Windows only', () => {
+        const p = pathOfLength(248);
+        expect(p).toHaveLength(248);
         expect(longPath(p)).toBe(process.platform === 'win32' ? `\\\\?\\${p}` : p);
+    });
+
+    test('doesn\'t prefix a path twice', () => {
+        const p = pathOfLength(300);
+        expect(longPath(longPath(p))).toBe(longPath(p));
     });
 });
 
@@ -107,12 +123,16 @@ describe('writeOverrides', () => {
     let dir, overridesDir, syncA, syncB;
 
     beforeEach(() => {
-        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overrides-'));
+        // The real path, so that where the temp folder is a link (macOS) paths can't differ by it
+        dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'overrides-')));
         overridesDir = path.join(dir, 'overrides');
         syncA = path.join(dir, 'sync-a');
         syncB = path.join(dir, 'sync-b');
     });
-    afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+    afterEach(() => {
+        jest.restoreAllMocks();
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
 
     const read = (p) => fs.readFileSync(p, 'utf8');
     const manifestOf = (syncDir) => JSON.parse(read(path.join(syncDir, '.reactor-sync', 'test-build.json')));
@@ -123,12 +143,13 @@ describe('writeOverrides', () => {
 
     test('script goes at every environment URL, both names', () => {
         const urls = scriptUrls([environment('development', [DEVELOPMENT]), environment('production', [PRODUCTION])]);
-        const { written, removed } = write(syncA, { scriptText: '// the test build\n', scriptUrls: urls });
+        const { written, removed, warnings } = write(syncA, { scriptText: '// the test build\n', scriptUrls: urls });
 
         const names = ['launch-a1b2c3d4e5f6-development.min.js', 'launch-a1b2c3d4e5f6-development.js', 'launch-a1b2c3d4e5f6.min.js', 'launch-a1b2c3d4e5f6.js'];
         expect(written).toEqual(names.map(name => onDisk(name)));
         for (const file of written) expect(read(file)).toBe('// the test build\n');
         expect(removed).toEqual([]);
+        expect(warnings).toEqual([]);
     });
 
     test('custom code files go at their own URLs', () => {
@@ -216,6 +237,30 @@ describe('writeOverrides', () => {
         expect(manifestOf(syncA).files).toEqual(a.written);
     });
 
+    test('writes a URL once when it is listed twice', () => {
+        const { written } = write(syncA, {
+            scriptUrls: [PRODUCTION.debug, PRODUCTION.debug],
+            files: [{ url: PRODUCTION.debug, text: 'custom code' }]
+        });
+
+        expect(written).toEqual([onDisk('launch-a1b2c3d4e5f6.js')]);
+        expect(manifestOf(syncA).files).toEqual(written);
+    });
+
+    test('needs an overrides folder, and writes nothing without one', () => {
+        // Without one, the build would land in the folder the run is in
+        const cwd = process.cwd();
+        process.chdir(dir);
+        try {
+            for (const missing of ['', '  ', undefined, null]) {
+                expect(() => write(syncA, { overridesDir: missing, scriptUrls: [PRODUCTION.debug] })).toThrow('Choose an overrides folder');
+            }
+        } finally {
+            process.chdir(cwd);
+        }
+        expect(fs.readdirSync(dir)).toEqual([]);
+    });
+
     describe('a previous manifest that lists more than it should', () => {
         const previously = (syncDir, files) => {
             fs.mkdirSync(path.join(syncDir, '.reactor-sync'), { recursive: true });
@@ -227,6 +272,8 @@ describe('writeOverrides', () => {
             // Joined by hand, so the ".." stays in the manifest as written
             const viaDotDot = `${overridesDir}${path.sep}..${path.sep}outside-too.js`;
             const inSibling = path.join(dir, 'overrides-elsewhere', 'file.js');
+            // The ".." resolves the folder before it, so that has to be there
+            fs.mkdirSync(overridesDir, { recursive: true });
             fs.mkdirSync(path.dirname(inSibling), { recursive: true });
             for (const file of [outside, viaDotDot, inSibling]) fs.writeFileSync(file, 'keep me');
             previously(syncA, [outside, viaDotDot, inSibling]);
@@ -252,13 +299,18 @@ describe('writeOverrides', () => {
 
         test('ignores entries that aren\'t absolute paths', () => {
             fs.mkdirSync(overridesDir, { recursive: true });
-            const relative = path.relative(process.cwd(), path.join(overridesDir, 'relative.js'));
             fs.writeFileSync(path.join(overridesDir, 'relative.js'), 'keep me');
-            previously(syncA, [relative, 42, null, '']);
+            // Relative to the folder the run is in, which is dir, whatever drive that is on
+            previously(syncA, [path.join('overrides', 'relative.js'), 42, null, '']);
 
-            const { removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
-
-            expect(removed).toEqual([]);
+            const cwd = process.cwd();
+            process.chdir(dir);
+            try {
+                const { removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
+                expect(removed).toEqual([]);
+            } finally {
+                process.chdir(cwd);
+            }
             expect(read(path.join(overridesDir, 'relative.js'))).toBe('keep me');
         });
 
@@ -274,29 +326,154 @@ describe('writeOverrides', () => {
             expect(read(path.join(folder, 'inside.js'))).toBe('keep me');
         });
 
-        test('removes nothing when the manifest can\'t be read, and replaces it', () => {
-            const stale = onDisk('launch-a1b2c3d4e5f6.min.js');
-            fs.mkdirSync(path.dirname(stale), { recursive: true });
-            fs.writeFileSync(stale, 'keep me');
-            fs.mkdirSync(path.join(syncA, '.reactor-sync'), { recursive: true });
-            fs.writeFileSync(path.join(syncA, '.reactor-sync', 'test-build.json'), '{ not json');
+        describe('that can\'t be read', () => {
+            const unreadable = (syncDir) => `The previous test build's manifest (${path.join(syncDir, '.reactor-sync', 'test-build.json')}) couldn't be read, so the files it listed were left in place`;
+            const manifestPath = () => path.join(syncA, '.reactor-sync', 'test-build.json');
+            const stale = () => onDisk('launch-a1b2c3d4e5f6.min.js');
 
-            const { written, removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
+            beforeEach(() => {
+                fs.mkdirSync(path.dirname(stale()), { recursive: true });
+                fs.writeFileSync(stale(), 'keep me');
+                fs.mkdirSync(path.dirname(manifestPath()), { recursive: true });
+            });
 
-            expect(removed).toEqual([]);
-            expect(read(stale)).toBe('keep me');
-            expect(manifestOf(syncA).files).toEqual(written);
+            // The text is made when the test runs, once there is a folder to point at
+            test.each([
+                ['isn\'t JSON', () => '{ not json'],
+                ['is null', () => 'null'],
+                ['has no files', () => '{}'],
+                ['is a list', () => '[]'],
+                ['has files that aren\'t a list', () => JSON.stringify({ files: stale() })],
+                ['has files as an object', () => JSON.stringify({ files: { 0: stale() } })]
+            ])('a manifest that %s removes nothing, says so, and is replaced', (_, textOf) => {
+                fs.writeFileSync(manifestPath(), textOf());
+
+                const { written, removed, warnings } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
+
+                expect(removed).toEqual([]);
+                expect(warnings).toEqual([unreadable(syncA)]);
+                expect(read(stale())).toBe('keep me');
+                expect(manifestOf(syncA).files).toEqual(written);
+            });
+
+            test('no manifest at all is not a warning', () => {
+                const { warnings } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
+
+                expect(warnings).toEqual([]);
+            });
         });
 
-        // Windows paths ignore case: the same file, spelled differently, is still this run's
-        (process.platform === 'win32' ? test : test.skip)('keeps a file this run wrote when the manifest spells its path in another case', () => {
+        // These file systems ignore case: the same file, spelled differently, is still this run's
+        (['win32', 'darwin'].includes(process.platform) ? test : test.skip)('keeps a file this run wrote when the manifest spells its name in another case', () => {
             const { written } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
-            previously(syncA, [written[0].toUpperCase()]);
+            previously(syncA, [path.join(path.dirname(written[0]), path.basename(written[0]).toUpperCase())]);
 
             const { removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
 
             expect(removed).toEqual([]);
             expect(fs.existsSync(written[0])).toBe(true);
+        });
+    });
+
+    describe('links', () => {
+        // A directory link: a junction on Windows, which needs no privilege. False when the OS refuses.
+        const link = (target, at) => {
+            try {
+                fs.symlinkSync(target, at, 'junction');
+                return true;
+            } catch (err) {
+                if (err.code === 'EPERM' || err.code === 'EACCES') return false;
+                throw err;
+            }
+        };
+
+        test('never removes a file by way of a link out of the overrides folder', () => {
+            const elsewhere = path.join(dir, 'elsewhere');
+            fs.mkdirSync(elsewhere);
+            fs.writeFileSync(path.join(elsewhere, 'victim.js'), 'keep me');
+            fs.mkdirSync(overridesDir);
+            if (!link(elsewhere, path.join(overridesDir, 'linked'))) return;
+            fs.mkdirSync(path.join(syncA, '.reactor-sync'), { recursive: true });
+            fs.writeFileSync(path.join(syncA, '.reactor-sync', 'test-build.json'), JSON.stringify({ files: [path.join(overridesDir, 'linked', 'victim.js')] }));
+
+            const { removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
+
+            expect(removed).toEqual([]);
+            expect(read(path.join(elsewhere, 'victim.js'))).toBe('keep me');
+        });
+
+        test('removes files in an overrides folder that is itself a link', () => {
+            const real = path.join(dir, 'real-overrides');
+            fs.mkdirSync(real);
+            if (!link(real, overridesDir)) return;
+
+            write(syncA, { scriptUrls: [PRODUCTION.minified, PRODUCTION.debug] });
+            const { removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
+
+            expect(removed).toEqual([onDisk('launch-a1b2c3d4e5f6.min.js')]);
+            expect(fs.existsSync(path.join(real, 'assets.adobedtm.com', '0000aaaa', '1111bbbb', 'launch-a1b2c3d4e5f6.min.js'))).toBe(false);
+            expect(fs.existsSync(path.join(real, 'assets.adobedtm.com', '0000aaaa', '1111bbbb', 'launch-a1b2c3d4e5f6.js'))).toBe(true);
+        });
+    });
+
+    describe('a run that fails part way', () => {
+        const denied = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+        // Makes fs[name] fail for these paths and work for every other
+        const failOn = (name, ...targets) => {
+            const original = fs[name];
+            return jest.spyOn(fs, name).mockImplementation((p, ...rest) => {
+                if (targets.includes(p)) throw denied();
+                return original(p, ...rest);
+            });
+        };
+        const MINIFIED = () => onDisk('launch-a1b2c3d4e5f6.min.js');
+        const DEBUG = () => onDisk('launch-a1b2c3d4e5f6.js');
+        const CODE = () => onDisk('rule-code', 'RC1111.js');
+
+        beforeEach(() => {
+            write(syncA, { scriptUrls: [PRODUCTION.minified, PRODUCTION.debug], files: [{ url: `${BASE}/rule-code/RC1111.js`, text: 'old code' }] });
+        });
+
+        test('a file that can\'t be removed doesn\'t stop the others, stays listed, and is thrown', () => {
+            failOn('unlinkSync', MINIFIED());
+
+            expect(() => write(syncA, { scriptUrls: [PRODUCTION.debug] })).toThrow('EPERM');
+
+            expect(fs.existsSync(CODE())).toBe(false);
+            expect(fs.existsSync(MINIFIED())).toBe(true);
+            expect(manifestOf(syncA).files).toEqual([DEBUG(), MINIFIED()]);
+
+            // Once it can be removed, the next run does
+            jest.restoreAllMocks();
+            const { removed } = write(syncA, { scriptUrls: [PRODUCTION.debug] });
+            expect(removed).toEqual([MINIFIED()]);
+            expect(manifestOf(syncA).files).toEqual([DEBUG()]);
+        });
+
+        test('several files that can\'t be removed are thrown together', () => {
+            failOn('unlinkSync', MINIFIED(), CODE());
+
+            let error;
+            try {
+                write(syncA, { scriptUrls: [PRODUCTION.debug] });
+            } catch (err) {
+                error = err;
+            }
+
+            expect(error).toBeInstanceOf(AggregateError);
+            expect(error.errors).toHaveLength(2);
+            expect(manifestOf(syncA).files).toEqual([DEBUG(), MINIFIED(), CODE()]);
+        });
+
+        test('a file that can\'t be written lists what was written and what was not yet removed', () => {
+            const development = onDisk('launch-a1b2c3d4e5f6-development.js');
+            failOn('writeFileSync', development);
+
+            expect(() => write(syncA, { scriptUrls: [PRODUCTION.debug, DEVELOPMENT.debug] })).toThrow('EPERM');
+
+            expect(fs.existsSync(MINIFIED())).toBe(true);
+            expect(fs.existsSync(CODE())).toBe(true);
+            expect(manifestOf(syncA).files).toEqual([DEBUG(), development, MINIFIED(), CODE()]);
         });
     });
 
@@ -323,8 +500,39 @@ describe('writeOverrides', () => {
             expect(next.removed).toEqual(written);
             expect(fs.existsSync(longPath(target))).toBe(false);
         } finally {
-            // The folders under 260 characters go with the temp folder
+            // The folders above it are short enough to go with the temp folder
             fs.rmSync(longPath(deep), { recursive: true, force: true });
+        }
+    });
+
+    // Windows reads a path of 248 characters or more only with the prefix, and a call that
+    // forgets it fails only on a machine without long path support: this catches it anywhere
+    (process.platform === 'win32' ? test : test.skip)('every fs call on a long path carries the prefix', () => {
+        const nested = (root) => path.join(root, 'a'.repeat(60), 'b'.repeat(60), 'c'.repeat(60), 'd'.repeat(60));
+        const deepOverrides = nested(overridesDir);
+        const deepSync = nested(syncA);
+        const names = ['mkdirSync', 'writeFileSync', 'readFileSync', 'realpathSync.native', 'lstatSync', 'unlinkSync'];
+        const spies = Object.fromEntries(names.map(name => {
+            const [owner, method] = name === 'realpathSync.native' ? [fs.realpathSync, 'native'] : [fs, name];
+            return [name, jest.spyOn(owner, method)];
+        }));
+        const options = { overridesDir: deepOverrides, syncDir: deepSync, scriptText: 'deep text', files: [], manifest: {} };
+
+        try {
+            // The second run reads the manifest, then removes the minified file
+            writeOverrides({ ...options, scriptUrls: [PRODUCTION.minified, PRODUCTION.debug] });
+            writeOverrides({ ...options, scriptUrls: [PRODUCTION.debug] });
+
+            for (const name of names) {
+                const paths = spies[name].mock.calls.map(([p]) => String(p));
+                const long = paths.filter(p => p.replace(/^\\\\\?\\/, '').length >= 248);
+                expect(long.length).toBeGreaterThan(0);
+                for (const p of long) expect(p.startsWith('\\\\?\\')).toBe(true);
+            }
+        } finally {
+            jest.restoreAllMocks();
+            fs.rmSync(longPath(deepOverrides), { recursive: true, force: true });
+            fs.rmSync(longPath(deepSync), { recursive: true, force: true });
         }
     });
 });
