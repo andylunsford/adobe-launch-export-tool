@@ -631,7 +631,8 @@ ipcMain.handle('save-file', async (event, { content, defaultName }) => {
 });
 
 ipcMain.handle('perform-sync-download', async (event, args) => {
-    const { property, targetDir, token, creds } = args;
+    // library is { id, name } to sync one library's revisions instead of the property
+    const { property, library, targetDir, token, creds } = args;
     const headers = getHeaders(token, creds);
     const get = reactorGet(headers);
 
@@ -641,32 +642,40 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
     try {
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
+        // 1. Save .reactor-settings.json (Config file for the project), unless the folder holds something else
+        syncLib.bindFolder(targetDir, {
+            propertyId: property.id,
+            propertyName: property.name,
+            orgId: creds.organization_id,
+            ...(library && { libraryId: library.id, libraryName: library.name })
+        });
+        sendLog(`Created project config at ${targetDir}`);
+
         try { db.upsertProperty(property); }
         catch (e) { console.error('[DB] upsertProperty:', e.message); }
 
-        // 1. Save .reactor-settings.json (Config file for the project)
-        fs.writeFileSync(path.join(targetDir, '.reactor-settings.json'), JSON.stringify({
-            propertyId: property.id,
-            propertyName: property.name,
-            orgId: creds.organization_id
-        }, null, 2));
-        sendLog(`Created project config at ${targetDir}`);
-
         // 2. List everything, then write it (lib/reactor-core/sync.js)
-        sendLog(`Fetching Rules, Data Elements, Extensions and Rule Components...`);
-        const listing = await syncLib.listProperty(get, property.id);
+        sendLog(library
+            ? `Fetching the Rules, Data Elements, Extensions and Rule Components of library ${library.name}...`
+            : `Fetching Rules, Data Elements, Extensions and Rule Components...`);
+        const listing = library
+            ? await syncLib.listLibrary(get, library.id)
+            : await syncLib.listProperty(get, property.id);
         listing.failed.forEach(rule => sendLog(`Error fetching components for ${rule.name}: ${rule.message}`));
 
-        try { db.upsertRules(listing.rules, property.id); }
-        catch (e) { console.error('[DB] sync upsertRules:', e.message); }
-        try { db.upsertDataElements(listing.data_elements, property.id); }
-        catch (e) { console.error('[DB] sync upsertDataElements:', e.message); }
-        try { db.upsertExtensions(listing.extensions, property.id); }
-        catch (e) { console.error('[DB] sync upsertExtensions:', e.message); }
-        for (const rule of listing.rules) {
-            const components = listing.rule_components.filter(rc => listing.ruleOf.get(rc.id) === rule.id);
-            try { db.upsertRuleComponents(components, rule.id, property.id); }
-            catch (e) { console.error('[DB] sync upsertRuleComponents:', e.message); }
+        // A library lists revisions, not heads; caching them would corrupt the cache
+        if (!library) {
+            try { db.upsertRules(listing.rules, property.id); }
+            catch (e) { console.error('[DB] sync upsertRules:', e.message); }
+            try { db.upsertDataElements(listing.data_elements, property.id); }
+            catch (e) { console.error('[DB] sync upsertDataElements:', e.message); }
+            try { db.upsertExtensions(listing.extensions, property.id); }
+            catch (e) { console.error('[DB] sync upsertExtensions:', e.message); }
+            for (const rule of listing.rules) {
+                const components = listing.rule_components.filter(rc => listing.ruleOf.get(rc.id) === rule.id);
+                try { db.upsertRuleComponents(components, rule.id, property.id); }
+                catch (e) { console.error('[DB] sync upsertRuleComponents:', e.message); }
+            }
         }
 
         sendLog(`Writing files...`);
@@ -680,18 +689,17 @@ ipcMain.handle('perform-sync-download', async (event, args) => {
 ipcMain.handle('perform-sync-diff', async (event, args) => {
     const { targetDir, token, creds } = args;
     
-    // Read config to find Property ID
-    const configPath = path.join(targetDir, '.reactor-settings.json');
-    if (!fs.existsSync(configPath)) throw new Error("No .reactor-settings.json found. Please run 'Initialize' first.");
-    
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const propertyId = config.propertyId;
+    // Read config to find the Property ID, or the library the folder holds
+    const config = syncLib.readConfig(targetDir);
+    if (!config) throw new Error("No .reactor-settings.json found. Please run 'Initialize' first.");
 
     const headers = getHeaders(token, creds);
     const get = reactorGet(headers);
 
     // List functions for the Diff Runner, rule components included
-    const api = syncLib.syncApi(get, propertyId);
+    const api = config.libraryId
+        ? syncLib.librarySyncApi(get, config.libraryId)
+        : syncLib.syncApi(get, config.propertyId);
 
     const fetchPkg = (id) => getExtensionPackage(id, headers);
 
