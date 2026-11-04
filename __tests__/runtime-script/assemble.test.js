@@ -258,9 +258,10 @@ describe('assembleTestBuild', () => {
         const tools = revision('extensions', 42, { name: 'tools', display_name: 'Tools' }, reactorId('EX', 2));
         const withTools = { ...production, container, revisions: { ...PRODUCTION.revisions, extensions: [...PRODUCTION.revisions.extensions, tools] } };
 
-        const core = revision('extensions', 45, { name: 'core', display_name: 'Core' }, reactorId('EX', 1));
+        // Below tools' EX…42, so core stays first only because of its revision id
+        const core = revision('extensions', 40, { name: 'core', display_name: 'Core' }, reactorId('EX', 1));
         const { container: built } = assemble({ extensions: [{ revision: core }] }, { production: withTools });
-        expect(Object.keys(built.extensions)).toEqual(['tools', 'core']);
+        expect(Object.keys(built.extensions)).toEqual(['core', 'tools']);
     });
 });
 
