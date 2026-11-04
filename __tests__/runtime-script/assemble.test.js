@@ -394,7 +394,22 @@ describe('with a library sync folder', () => {
         const { rules, warnings } = await readLibraryItems(dir, fetchPkg);
         expect(rules.map(r => r.revision.id)).toEqual([loadRule.id]);
         expect(warnings).toEqual([
-            "rule component Checkout Path (RC00000000000000000000000000000025) left out: its rule revision RL00000000000000000000000000000012 isn't in the sync folder"
+            "rule revision RL00000000000000000000000000000012 isn't in the folder; its 1 component was left out"
+        ]);
+    });
+
+    test('readLibraryItems warns once for each rule whose folder was deleted, however many components it had', async () => {
+        await downloadProduction();
+        // Deleting a rule's folder is how it is taken out of the library; its components' folders stay
+        fs.rmSync(folderOf('rules', clickRule.id), { recursive: true });
+        fs.rmSync(folderOf('rules', loadRule.id), { recursive: true });
+
+        const { rules, warnings } = await readLibraryItems(dir, fetchPkg);
+        expect(rules).toEqual([]);
+        // In rule revision id order
+        expect(warnings).toEqual([
+            "rule revision RL00000000000000000000000000000011 isn't in the folder; its 2 components were left out",
+            "rule revision RL00000000000000000000000000000012 isn't in the folder; its 3 components were left out"
         ]);
     });
 

@@ -219,9 +219,9 @@ describe('generateTestBuild', () => {
         expect(fakes.fetchPkg.mock.calls).toEqual([[PACKAGE.id]]);
 
         expect(log.mock.calls.length).toBeGreaterThan(1);
-        expect(log.mock.calls.at(-1)).toEqual([
-            `Chrome applies Local Overrides only while DevTools is open. In DevTools, open Sources → Overrides and select ${overridesDir}`
-        ]);
+        // Where to point DevTools is the renderer's to say, once
+        expect(log.mock.calls.at(-1)).toEqual(['Writing the test build...']);
+        expect(log.mock.calls.flat().filter(line => /DevTools|Overrides/.test(line))).toEqual([]);
     });
 
     test('reuses the downloaded script for the same build', async () => {
@@ -447,6 +447,27 @@ describe('generateTestBuild', () => {
             'data element Visitor: taken out of the library in Launch since the sync. Sync the library again.',
             'Click: custom code kept inline; Launch would load it from a file'
         ]);
+    });
+
+    test("names a library file that isn't valid JSON, and writes nothing", async () => {
+        const downloaded = withVisitor(editedClick());
+        await download(downloaded);
+        // A hand edit that broke it
+        const settingsFile = path.join(syncDir, 'data_elements', downloaded.data_elements[0].id, 'settings.json');
+        fs.writeFileSync(settingsFile, '{ "path": "visitor.id", }');
+
+        await expect(generate(launch({ library: downloaded }))).rejects.toThrow(`${settingsFile} isn't valid JSON: `);
+        expect(fs.readdirSync(overridesDir)).toEqual([]);
+    });
+
+    test("names the folder's config when it isn't valid JSON", async () => {
+        await download();
+        const configFile = path.join(syncDir, '.reactor-settings.json');
+        fs.writeFileSync(configFile, '{ "libraryId": ');
+
+        const fakes = launch();
+        await expect(generate(fakes)).rejects.toThrow(`${configFile} isn't valid JSON: `);
+        expect(fakes.get).not.toHaveBeenCalled();
     });
 
     test("warns when the library couldn't be checked against Launch, and still builds", async () => {

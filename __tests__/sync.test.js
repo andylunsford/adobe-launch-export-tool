@@ -384,6 +384,13 @@ describe('library sync', () => {
             expect(readConfig(dir)).toBeNull();
         });
 
+        test("readConfig names a config that isn't valid JSON", () => {
+            fs.writeFileSync(configFile(), '{ "propertyId": "PR1", ');
+            expect(() => readConfig(dir)).toThrow(`${configFile()} isn't valid JSON: `);
+            // So does everything that reads it first
+            expect(() => bindFolder(dir, property)).toThrow(`${configFile()} isn't valid JSON: `);
+        });
+
         test('bindFolder writes the config, which readConfig reads back', () => {
             const config = forLibrary('LB1', 'Release 1');
             bindFolder(dir, config);

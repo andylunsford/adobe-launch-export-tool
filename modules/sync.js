@@ -29,18 +29,23 @@ async function selectOverridesFolder() {
     }
 }
 
-// The overrides folder chosen last time
-async function restoreOverridesFolder() {
-    try {
-        const config = await window.api.getSavedConfig();
-        if (config.test_build_overrides_dir) {
-            document.getElementById('test-build-overrides-path').value = config.test_build_overrides_dir;
+// The overrides folder chosen last time, read once: when the Developer Sync tab is
+// first shown (renderer.js), or when Generate needs it first. Not when this module is
+// imported: that read raced the E2E tests' mocks, so it could get the real config.
+let restoringOverridesFolder = null;
+function restoreOverridesFolder() {
+    restoringOverridesFolder ??= (async () => {
+        try {
+            const config = await window.api.getSavedConfig();
+            const field = document.getElementById('test-build-overrides-path');
+            // A folder chosen in the meantime wins
+            if (config.test_build_overrides_dir && !field.value) field.value = config.test_build_overrides_dir;
+        } catch (e) {
+            console.error("restoreOverridesFolder error:", e);
         }
-    } catch (e) {
-        console.error("restoreOverridesFolder error:", e);
-    }
+    })();
+    return restoringOverridesFolder;
 }
-restoreOverridesFolder();
 
 function clearLog() {
     document.getElementById('sync-console').innerHTML = '';
@@ -206,8 +211,9 @@ async function checkSyncStatus() {
     if (properties.length === 0) return alert("Please select one or more properties from the property list.");
     if (!folder) return alert("Please select a local folder.");
 
-    // A library's folder is diffed against that library
+    // A library's folder is diffed against that library, which belongs to one property
     const library = selectedLibrary();
+    if (library && !propertyForLibrary('Checking a library', library)) return;
 
     clearLog();
     ui.logSync(`Checking Status (Diffing) for ${properties.length} properties...`);
@@ -295,12 +301,29 @@ function reportTestBuild(property, overridesDir, result) {
     ui.logSync(`[${property.name}] Point Chrome DevTools → Sources → Overrides at ${overridesDir} (overrides apply only while DevTools is open).`);
 }
 
+// One test build at a time: two would log over each other and write the same files at once
+let generating = false;
+
 // Applies the library in the sync folder to production's script, and writes the result to the overrides folder
 async function generateTestBuild() {
+    if (generating) return;
+    generating = true;
+    const button = document.getElementById('test-build-generate');
+    button.disabled = true;
+    try {
+        await buildFromLibrary();
+    } finally {
+        generating = false;
+        button.disabled = false;
+    }
+}
+
+async function buildFromLibrary() {
     const library = selectedLibrary();
     const property = propertyForLibrary('Generating a test build', library);
     if (!property) return;
 
+    await restoreOverridesFolder();
     const folder = document.getElementById('sync-folder-path').value;
     const overridesDir = document.getElementById('test-build-overrides-path').value;
     if (!library) return refuse('Choose a library first: click Libraries, pick one and download it.');
@@ -340,6 +363,7 @@ window.generateTestBuild = generateTestBuild;
 export {
     selectSyncFolder,
     selectOverridesFolder,
+    restoreOverridesFolder,
     loadSyncLibraries,
     initSyncDownload,
     checkSyncStatus,

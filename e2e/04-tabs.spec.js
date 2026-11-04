@@ -338,6 +338,8 @@ test.describe('Developer Sync tab', () => {
         await expect(log).toContainText('Replaced [1]');
         await expect(log).toContainText('rule Click');
         await expect(log).toContainText('Point Chrome DevTools → Sources → Overrides at C:/mock-sync (overrides apply only while DevTools is open).');
+        // Said once
+        await expect(log.locator('div', { hasText: /Sources → Overrides/ })).toHaveCount(1);
 
         const sent = await electronApp.evaluate(() => globalThis.__lastTestBuildPayload);
         expect(sent).toMatchObject({
@@ -460,7 +462,63 @@ test.describe('Developer Sync tab', () => {
         await expect.poll(() => electronApp.evaluate(() => globalThis.__savedConfig.test_build_overrides_dir))
             .toBe('C:/mock-sync');
 
+        // The mocks keep no login, so log in again; the folder comes back with the Developer Sync tab
         await mockedWindow.reload();
+        await setupMainInterface(mockedWindow);
+        await mockedWindow.locator('.tab-btn', { hasText: 'Developer Sync' }).click();
         await expect(mockedWindow.locator('#test-build-overrides-path')).toHaveValue('C:/mock-sync');
+    });
+
+    // Read at import, the saved folder could come from the real config before the mocks are in
+    test('the overrides folder is read when the Developer Sync tab is first shown, not before', async ({ electronApp, mockedWindow }) => {
+        await setupMainInterface(mockedWindow);
+        await electronApp.evaluate(() => { globalThis.__savedConfig.test_build_overrides_dir = 'C:/saved-overrides'; });
+        await expect(mockedWindow.locator('#test-build-overrides-path')).toHaveValue('');
+
+        await mockedWindow.locator('.tab-btn', { hasText: 'Developer Sync' }).click();
+        await expect(mockedWindow.locator('#test-build-overrides-path')).toHaveValue('C:/saved-overrides');
+    });
+
+    test('Generate runs once at a time, and again once the last run has settled, even in error', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await chooseLibrary(mockedWindow);
+        await browseOverrides(mockedWindow);
+        const log = mockedWindow.locator('#sync-console');
+        const generate = mockedWindow.locator('#tab-sync button', { hasText: 'Generate' });
+        // A run that lasts until the test ends it, in error
+        await electronApp.evaluate(({ ipcMain }) => {
+            globalThis.__testBuildCalls = 0;
+            ipcMain.removeHandler('generate-test-build');
+            ipcMain.handle('generate-test-build', () => {
+                globalThis.__testBuildCalls += 1;
+                return new Promise((_, reject) => {
+                    globalThis.__failTestBuild = () => reject(new Error('Test Build Failed: the network went away'));
+                });
+            });
+        });
+        const calls = () => electronApp.evaluate(() => globalThis.__testBuildCalls);
+
+        await generate.dblclick();
+        await expect.poll(calls).toBe(1);
+        await expect(generate).toBeDisabled();
+        // Nor does a call that doesn't go through the button start another
+        await mockedWindow.evaluate(() => window.generateTestBuild());
+        expect(await calls()).toBe(1);
+
+        await electronApp.evaluate(() => globalThis.__failTestBuild());
+        await expect(log).toContainText('the network went away');
+        await expect(generate).toBeEnabled();
+        await generate.click();
+        await expect.poll(calls).toBe(2);
+    });
+
+    test('Check Status with a library needs exactly one property', async ({ electronApp, mockedWindow }) => {
+        await openSyncWithProperty(mockedWindow);
+        await chooseLibrary(mockedWindow);
+        await setProperty(mockedWindow, 'Mock Property Two', true);
+
+        await mockedWindow.locator('button', { hasText: 'Check Status' }).click();
+        await expect(mockedWindow.locator('#sync-console')).toContainText('Checking a library needs exactly one property selected.');
+        expect(await electronApp.evaluate(() => globalThis.__lastSyncDiffPayload)).toBeUndefined();
     });
 });
