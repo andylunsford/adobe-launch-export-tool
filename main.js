@@ -9,6 +9,7 @@ const { diffSets } = reactorCore.compareBuilds;
 const { listArchiveWork, archiveItem, markDeletions } = reactorCore.archive;
 const { rebuildNameLinks } = reactorCore.nameLinks;
 const syncLib = reactorCore.sync;
+const { generateTestBuild, TestBuildStop } = reactorCore.runtimeScript;
 const db = require('./lib/db');
 
 // --- TLS ---
@@ -709,6 +710,27 @@ ipcMain.handle('perform-sync-diff', async (event, args) => {
     } catch (error) {
         console.error(error);
         throw new Error(`Diff Failed: ${error.message}`);
+    }
+});
+
+// Makes a test build from the library the folder holds and writes it to the overrides folder
+ipcMain.handle('generate-test-build', async (event, { targetDir, overridesDir, environmentId, token, creds }) => {
+    const headers = getHeaders(token, creds);
+    const get = reactorGet(headers);
+    // The script comes from the CDN, which needs no credentials, so none are sent to it
+    const getText = (url) => axios.get(url, { httpsAgent: apiAgent, responseType: 'text', transformResponse: [x => x] }).then(r => r.data);
+    const fetchPkg = (id) => getExtensionPackage(id, headers);
+    const sendLog = (msg) => event.sender.send('sync-log', msg);
+
+    try {
+        return await generateTestBuild({
+            syncDir: targetDir, overridesDir, get, getText, fetchPkg, environmentId, now: new Date(), log: sendLog
+        });
+    } catch (error) {
+        // Stopped on purpose: the renderer lists what stopped it
+        if (error instanceof TestBuildStop) return { stopped: true, problems: error.problems };
+        console.error(error);
+        throw new Error(`Test Build Failed: ${error.message}`);
     }
 });
 
