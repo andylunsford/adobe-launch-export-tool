@@ -51,6 +51,14 @@ const MOCK_DATA = {
             meta: { build_status: null, currently_live: true },
             relationships: { last_build: { data: { id: 'BL_001', type: 'builds' } } },
         },
+        {
+            id: 'LB_002',
+            type: 'libraries',
+            attributes: { name: 'Library 2.0', state: 'development', build_required: true,
+                          published_at: null, updated_at: '2026-02-10T09:30:00Z' },
+            meta: { build_status: null, currently_live: false },
+            relationships: { last_build: { data: null } },
+        },
     ],
     envLibrary: { libraryId: 'LB_001', libraryName: 'Library 1.0', buildId: 'BL_001', buildDate: '2026-01-15T12:00:00Z' },
     // What lib/reactor-core/compare-builds diffSets returns: one rule with a
@@ -108,6 +116,12 @@ const MOCK_DATA = {
         keptUnlisted: [],
         incomplete: []
     },
+    // What generate-test-build returns: the report, then the files written and removed.
+    testBuild: {
+        report: { replaced: ['rule Click'], added: [], dropped: [], warnings: [] },
+        written: ['C:/mock-sync/x.js'],
+        removed: []
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -127,7 +141,7 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
             'perform-environment-comparison', 'save-file',
             'get-cache-stats', 'clear-cache', 'perform-archive-scan',
             'resume-archive-run', 'select-folder', 'perform-sync-download',
-            'perform-sync-diff',
+            'perform-sync-diff', 'generate-test-build',
         ];
         channels.forEach(ch => { try { ipcMain.removeHandler(ch); } catch (_) {} });
 
@@ -175,8 +189,22 @@ async function injectIPCMocks(electronApp, loginOutcome = 'success') {
         });
         ipcMain.handle('resume-archive-run', () => ({ success: true }));
         ipcMain.handle('select-folder', () => 'C:/mock-sync');
-        ipcMain.handle('perform-sync-download', () => data.syncDownload);
-        ipcMain.handle('perform-sync-diff', () => data.syncDiff);
+        // Each keeps the last payload so a test can check which folder and library the renderer sent.
+        // Downloads keep every payload too, as one click can download several properties.
+        globalThis.__syncDownloadPayloads = [];
+        ipcMain.handle('perform-sync-download', (_event, payload) => {
+            globalThis.__lastSyncDownloadPayload = payload;
+            globalThis.__syncDownloadPayloads.push(payload);
+            return data.syncDownload;
+        });
+        ipcMain.handle('perform-sync-diff', (_event, payload) => {
+            globalThis.__lastSyncDiffPayload = payload;
+            return data.syncDiff;
+        });
+        ipcMain.handle('generate-test-build', (_event, payload) => {
+            globalThis.__lastTestBuildPayload = payload;
+            return data.testBuild;
+        });
     }, { outcome: loginOutcome, data: MOCK_DATA });
 }
 

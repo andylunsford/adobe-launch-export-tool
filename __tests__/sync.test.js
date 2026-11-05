@@ -3,7 +3,9 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { syncApi, listProperty, writeDownload, readBase } = require('../lib/reactor-core/sync');
+const {
+    syncApi, librarySyncApi, listProperty, listLibrary, writeDownload, readBase, readConfig, bindFolder
+} = require('../lib/reactor-core/sync');
 const runner = require('../lib/reactor-core/diff/runner');
 const toFiles = require('../lib/reactor-core/to-files');
 
@@ -91,16 +93,18 @@ const live = (overrides = {}) => listing({
     ...overrides
 });
 
+// A GET that serves one page per route, keyed by pathname, and fails on any other URL.
+function fakeGet(routes) {
+    return async (url) => {
+        const { pathname } = new URL(url);
+        const route = routes[pathname];
+        if (route instanceof Error) throw route;
+        if (!route) throw new Error(`unexpected ${pathname}`);
+        return { data: route, meta: { pagination: { next_page: null } } };
+    };
+}
+
 describe('listing a property', () => {
-    function fakeGet(routes) {
-        return async (url) => {
-            const { pathname } = new URL(url);
-            const route = routes[pathname];
-            if (route instanceof Error) throw route;
-            if (!route) throw new Error(`unexpected ${pathname}`);
-            return { data: route, meta: { pagination: { next_page: null } } };
-        };
-    }
     const rule2 = rule(2);
     const routes = {
         '/properties/PR1/rules': [rule1, rule2],
@@ -307,5 +311,123 @@ describe('first download into a folder from before there was a download record',
         expect(summary.setAside.map(item => item.id)).toEqual([leftover.id]);
         expect(summary.keptLocal.map(item => item.id)).toEqual([de1.id]);
         expect(states(await diff(live()))).toEqual({ modified: [de1.id], unchanged: [rule1.id, rc1.id] });
+    });
+});
+
+// A library holds revisions: copies of items with ids of their own, not the head items.
+describe('library sync', () => {
+    const ruleRev1 = rule(11, { revision_number: 3 });
+    const ruleRev2 = rule(12, { revision_number: 1 });
+    const deRev = dataElement(11, 'return 1;', { revision_number: 2 });
+    const rcRev1 = component(11, 'console.log(1);', { revision_number: 4 });
+    const rcRev2 = component(12, 'console.log(2);');
+    const routes = {
+        '/libraries/LB1/rules': [ruleRev1, ruleRev2],
+        '/libraries/LB1/data_elements': [deRev],
+        '/libraries/LB1/extensions': [],
+        [`/rules/${ruleRev1.id}/rule_components`]: [rcRev1],
+        [`/rules/${ruleRev2.id}/rule_components`]: [rcRev2]
+    };
+    const get = fakeGet(routes);
+    const everyRevision = [ruleRev1, ruleRev2, deRev, rcRev1, rcRev2];
+
+    test('listLibrary lists the library\'s revisions and each rule revision\'s components', async () => {
+        const result = await listLibrary(get, 'LB1');
+        expect(result.rules.map(r => r.id)).toEqual([ruleRev1.id, ruleRev2.id]);
+        expect(result.data_elements.map(d => d.id)).toEqual([deRev.id]);
+        expect(result.extensions).toEqual([]);
+        expect(result.rule_components.map(c => c.id)).toEqual([rcRev1.id, rcRev2.id]);
+        expect(result.ruleOf.get(rcRev1.id)).toBe(ruleRev1.id);
+        expect(result.ruleOf.get(rcRev2.id)).toBe(ruleRev2.id);
+        expect(result.failed).toEqual([]);
+    });
+
+    test('a rule revision whose components can\'t be listed leaves the list incomplete', async () => {
+        const failing = fakeGet({ ...routes, [`/rules/${ruleRev2.id}/rule_components`]: new Error('500') });
+        const result = await listLibrary(failing, 'LB1');
+        expect(result.failed.map(f => f.id)).toEqual([ruleRev2.id]);
+        await expect(librarySyncApi(failing, 'LB1').getRuleComponents()).rejects.toThrow(/couldn't be listed/);
+    });
+
+    test('writeDownload of a library listing writes folders by revision id, and the diff compares against the library', async () => {
+        await download(await listLibrary(get, 'LB1'));
+
+        for (const item of everyRevision) expect(fs.existsSync(path.join(folderOf(item), 'data.json'))).toBe(true);
+        expect(readBase(dir).items[rcRev1.id]).toMatchObject({ type: 'rule_components', rule_id: ruleRev1.id });
+
+        const result = await runner(dir, librarySyncApi(get, 'LB1'), fetchPkg);
+        expect(states(result)).toEqual({ unchanged: expect.arrayContaining(everyRevision.map(item => item.id)) });
+        expect(result.unchanged).toHaveLength(everyRevision.length);
+    });
+
+    test('a revision removed from the library is set aside on the next download', async () => {
+        await download(await listLibrary(get, 'LB1'));
+        const smaller = fakeGet({ ...routes, '/libraries/LB1/rules': [ruleRev1] });
+
+        const summary = await download(await listLibrary(smaller, 'LB1'));
+
+        expect(summary.setAside.map(item => item.id).sort()).toEqual([rcRev2.id, ruleRev2.id].sort());
+        expect(fs.existsSync(folderOf(ruleRev2))).toBe(false);
+        expect(fs.existsSync(path.join(dir, '_deleted', 'rules', ruleRev2.id, 'data.json'))).toBe(true);
+        expect(fs.existsSync(path.join(dir, '_deleted', 'rule_components', rcRev2.id, 'data.json'))).toBe(true);
+        const result = await runner(dir, librarySyncApi(smaller, 'LB1'), fetchPkg);
+        expect(states(result)).toEqual({ unchanged: [ruleRev1.id, deRev.id, rcRev1.id] });
+    });
+
+    describe('the folder\'s config', () => {
+        const property = { propertyId: 'PR1', propertyName: 'Property One', orgId: 'ORG1@AdobeOrg' };
+        const forLibrary = (id, name) => ({ ...property, libraryId: id, libraryName: name });
+        const configFile = () => path.join(dir, '.reactor-settings.json');
+        const holdsLibrary = (name) => new Error(`This folder holds library "${name}". Sync another library into its own folder.`);
+
+        test('readConfig is null for a folder with no config', () => {
+            expect(readConfig(dir)).toBeNull();
+        });
+
+        test("readConfig names a config that isn't valid JSON", () => {
+            fs.writeFileSync(configFile(), '{ "propertyId": "PR1", ');
+            expect(() => readConfig(dir)).toThrow(`${configFile()} isn't valid JSON: `);
+            // So does everything that reads it first
+            expect(() => bindFolder(dir, property)).toThrow(`${configFile()} isn't valid JSON: `);
+        });
+
+        test('bindFolder writes the config, which readConfig reads back', () => {
+            const config = forLibrary('LB1', 'Release 1');
+            bindFolder(dir, config);
+            expect(readConfig(dir)).toEqual(config);
+            expect(fs.readFileSync(configFile(), 'utf8')).toBe(JSON.stringify(config, null, 2));
+        });
+
+        test('bindFolder lets the same library sync into its folder again, with its current name', async () => {
+            bindFolder(dir, forLibrary('LB1', 'Release 1'));
+            await download(await listLibrary(get, 'LB1'));
+            bindFolder(dir, forLibrary('LB1', 'Release 1 (renamed)'));
+            expect(readConfig(dir).libraryName).toBe('Release 1 (renamed)');
+        });
+
+        test('bindFolder lets a library sync into a folder that was only initialized', () => {
+            bindFolder(dir, property);
+            bindFolder(dir, forLibrary('LB1', 'Release 1'));
+            expect(readConfig(dir)).toEqual(forLibrary('LB1', 'Release 1'));
+        });
+
+        test('bindFolder refuses a folder bound to another library', () => {
+            bindFolder(dir, forLibrary('LB1', 'Release 1'));
+            expect(() => bindFolder(dir, forLibrary('LB2', 'Release 2'))).toThrow(holdsLibrary('Release 1'));
+            expect(readConfig(dir)).toEqual(forLibrary('LB1', 'Release 1'));
+        });
+
+        test('bindFolder refuses a whole-property download into a library folder', () => {
+            bindFolder(dir, forLibrary('LB1', 'Release 1'));
+            expect(() => bindFolder(dir, property)).toThrow(holdsLibrary('Release 1'));
+            expect(readConfig(dir)).toEqual(forLibrary('LB1', 'Release 1'));
+        });
+
+        test('bindFolder refuses a whole-property folder', async () => {
+            bindFolder(dir, property);
+            await download(live());
+            expect(() => bindFolder(dir, forLibrary('LB1', 'Release 1'))).toThrow(new Error('This folder holds the whole property'));
+            expect(readConfig(dir)).toEqual(property);
+        });
     });
 });

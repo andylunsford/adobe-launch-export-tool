@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('api', {
     performSyncDownload: (payload) => ipcRenderer.invoke('perform-sync-download', payload),
     performSyncDiff: (payload) => ipcRenderer.invoke('perform-sync-diff', payload),
     performSyncPush: (payload) => ipcRenderer.invoke('perform-sync-push', payload),
+    generateTestBuild: (payload) => ipcRenderer.invoke('generate-test-build', payload),
     onSyncLog: (callback) => subscribe('sync-log', callback),
 
     // --- Archive ---

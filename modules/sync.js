@@ -1,6 +1,7 @@
 /**
  * Developer Sync Module
- * Handles local download, status check (diff), and push to Launch.
+ * Handles local download (of a property, or of one library), status check (diff),
+ * push to Launch, and generating a test build from a library.
  */
 
 import * as ui from './ui-helpers.js';
@@ -16,16 +17,176 @@ async function selectSyncFolder() {
     }
 }
 
+async function selectOverridesFolder() {
+    try {
+        const path = await window.api.selectFolder();
+        if (!path) return;
+        document.getElementById('test-build-overrides-path').value = path;
+        await window.api.saveConfigField({ key: 'test_build_overrides_dir', value: path });
+    } catch (e) {
+        console.error("selectOverridesFolder error:", e);
+        alert("Error: " + e.message);
+    }
+}
+
+// The overrides folder chosen last time, read once: when the Developer Sync tab is
+// first shown (renderer.js), or when Generate needs it first. Not when this module is
+// imported: that read raced the E2E tests' mocks, so it could get the real config.
+let restoringOverridesFolder = null;
+function restoreOverridesFolder() {
+    restoringOverridesFolder ??= (async () => {
+        try {
+            const config = await window.api.getSavedConfig();
+            const field = document.getElementById('test-build-overrides-path');
+            // A folder chosen in the meantime wins
+            if (config.test_build_overrides_dir && !field.value) field.value = config.test_build_overrides_dir;
+        } catch (e) {
+            console.error("restoreOverridesFolder error:", e);
+        }
+    })();
+    return restoringOverridesFolder;
+}
+
+function clearLog() {
+    document.getElementById('sync-console').innerHTML = '';
+}
+
+// An action that can't go ahead says why in the log, which it starts afresh
+function refuse(message) {
+    clearLog();
+    ui.logSync(message);
+}
+
+function makeOption(value, label) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    return option;
+}
+
+// --- Property Picker ---
+// Lists the properties selected in the header. With more than one, the first
+// option is all of them, and whole-property actions run on each.
+function populateSyncProperties() {
+    const properties = ui.getSelectedProperties();
+    const select = document.getElementById('sync-prop-select');
+    const previous = select.value;
+
+    if (properties.length === 0) {
+        select.replaceChildren(makeOption('', 'Select Properties Globally First'));
+    } else {
+        select.replaceChildren(...(properties.length > 1 ? [makeOption('', 'All selected properties')] : []));
+        ui.groupByPlatform(properties, prop => prop.platform).forEach(group => {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = group.label;
+            group.items.forEach(prop => optgroup.appendChild(makeOption(prop.id, prop.name)));
+            select.appendChild(optgroup);
+        });
+        // Keep the property already chosen, and so the libraries listed for it
+        if (properties.some(prop => prop.id === previous)) select.value = previous;
+    }
+    if (select.value !== previous) clearSyncLibraries();
+}
+
+// The header's selection can change while this tab is open. Select-all sets
+// `checked` without firing change on each box, hence the second listener.
+document.getElementById('property-list').addEventListener('change', populateSyncProperties);
+document.getElementById('select-all-toggle').addEventListener('change', populateSyncProperties);
+
+// The property chosen, or null when it is all those selected
+function chosenProperty() {
+    const id = document.getElementById('sync-prop-select').value;
+    return ui.getSelectedProperties().find(prop => prop.id === id) || null;
+}
+
+// The properties a whole-property action runs on
+function syncProperties() {
+    const property = chosenProperty();
+    return property ? [property] : ui.getSelectedProperties();
+}
+
+// The one property a library action works on. Says why, and returns null, when none is chosen.
+function propertyForLibrary(action) {
+    const property = chosenProperty();
+    if (!property) refuse(`${action} needs one property. Choose it under Select Property.`);
+    return property;
+}
+
+// --- Library Picker ---
+// The libraries listed, and the development environments, are one property's:
+// choosing another property empties them.
+function clearSyncLibraries() {
+    document.getElementById('sync-library').options.length = 1; // "Whole property" stays
+    document.getElementById('test-build-environment').replaceChildren();
+}
+
+// The library picked (one of the chosen property's), or null for the whole property
+function selectedLibrary() {
+    const option = document.getElementById('sync-library').selectedOptions[0];
+    if (!option || !option.value) return null;
+    return { id: option.value, name: option.dataset.name };
+}
+
+// Where a property is synced: its own folder, or with a library picked, a folder
+// for that library, named as sanitizeFolderName (main.js) names one. A name that
+// loses every character is replaced by the library's id.
+function syncFolder(folder, property, library) {
+    if (!library) return `${folder}/${property.name}`;
+    const name = library.name.replace(/[^a-zA-Z0-9\- ]/g, '').trim() || library.id;
+    return `${folder}/${property.name} - ${name}`;
+}
+
+// Lists the property's libraries that aren't published, and its development environments
+async function loadSyncLibraries() {
+    const property = propertyForLibrary('Fetching libraries');
+    if (!property) return;
+
+    clearLog();
+    ui.logSync(`[${property.name}] Listing libraries and development environments...`);
+
+    try {
+        const request = { token: ui.getGlobalToken(), creds: ui.getCurrentCreds(), propertyId: property.id };
+        const [libraries, environments] = await Promise.all([
+            window.api.getLibraries(request),
+            window.api.getEnvironments(request)
+        ]);
+        // Another property was chosen meanwhile, so these aren't the ones to list
+        if (chosenProperty()?.id !== property.id) return;
+
+        clearSyncLibraries();
+        const picker = document.getElementById('sync-library');
+        libraries.filter(library => library.attributes.state !== 'published').forEach(library => {
+            const option = makeOption(library.id, `${library.attributes.name} (${library.attributes.state})`);
+            option.dataset.name = library.attributes.name;
+            picker.appendChild(option);
+        });
+
+        document.getElementById('test-build-environment').replaceChildren(
+            ...environments
+                .filter(environment => environment.attributes.stage === 'development')
+                .map(environment => makeOption(environment.id, environment.attributes.name))
+        );
+
+        ui.logSync(`[${property.name}] Libraries not yet published: ${picker.options.length - 1}.`);
+    } catch (e) {
+        ui.logSync(`[${property.name}] ❌ Error: ${e.message}`);
+    }
+}
+
 // One line per item: its folder, and its name (a component's with its rule's)
 function itemLine(mark, item, note = '') {
     const name = item.rule_name ? `${item.rule_name} › ${item.name}` : item.name;
     return `  [${mark}] ${item.path || `${item.type}/${item.id}`}${name ? ` (${name})` : ''}${note}`;
 }
 
+function logLines(property, title, lines) {
+    if (lines.length === 0) return;
+    ui.logSync(`[${property.name}] ${title} [${lines.length}]`);
+    lines.forEach(line => ui.logSync(line));
+}
+
 function logList(property, title, mark, items) {
-    if (items.length === 0) return;
-    ui.logSync(`[${property.name}] ${title} [${items.length}]`);
-    items.forEach(item => ui.logSync(itemLine(mark, item)));
+    logLines(property, title, items.map(item => itemLine(mark, item)));
 }
 
 function reportDownload(property, summary) {
@@ -43,13 +204,17 @@ function reportDownload(property, summary) {
 
 // --- Download Initialization ---
 async function initSyncDownload() {
-    const properties = ui.getSelectedProperties();
+    const properties = syncProperties();
     const folder = document.getElementById('sync-folder-path').value;
-    
+
     if (properties.length === 0) return alert("Please select one or more properties from the property list.");
     if (!folder) return alert("Please select a local folder.");
 
-    document.getElementById('sync-console').innerHTML = ''; // Clear log
+    // A library belongs to one property
+    const library = selectedLibrary();
+    if (library && !propertyForLibrary('Downloading a library')) return;
+
+    clearLog();
     ui.logSync(`Starting Initialization for ${properties.length} properties...`);
 
     // Listener for logs
@@ -57,11 +222,12 @@ async function initSyncDownload() {
 
     try {
         for (const property of properties) {
-            ui.logSync(`[${property.name}] Starting download...`);
+            ui.logSync(`[${property.name}] Starting download${library ? ` of library ${library.name}` : ''}...`);
 
             const summary = await window.api.performSyncDownload({
                 property: { id: property.id, name: property.name },
-                targetDir: `${folder}/${property.name}`, // APPEND PROPERTY NAME
+                library: library && { id: library.id, name: library.name },
+                targetDir: syncFolder(folder, property, library), // APPEND PROPERTY NAME (AND LIBRARY NAME)
                 token: ui.getGlobalToken(),
                 creds: ui.getCurrentCreds()
             });
@@ -77,13 +243,17 @@ async function initSyncDownload() {
 
 // --- Sync Status Check ---
 async function checkSyncStatus() {
-    const properties = ui.getSelectedProperties();
+    const properties = syncProperties();
     const folder = document.getElementById('sync-folder-path').value;
-    
+
     if (properties.length === 0) return alert("Please select one or more properties from the property list.");
     if (!folder) return alert("Please select a local folder.");
 
-    document.getElementById('sync-console').innerHTML = ''; // Clear log
+    // A library's folder is diffed against that library, which belongs to one property
+    const library = selectedLibrary();
+    if (library && !propertyForLibrary('Checking a library')) return;
+
+    clearLog();
     ui.logSync(`Checking Status (Diffing) for ${properties.length} properties...`);
 
     for (const property of properties) {
@@ -92,7 +262,7 @@ async function checkSyncStatus() {
         try {
             const result = await window.api.performSyncDiff({
                 property: { id: property.id, name: property.name }, // Pass property context
-                targetDir: `${folder}/${property.name}`, // APPEND PROPERTY NAME
+                targetDir: syncFolder(folder, property, library), // APPEND PROPERTY NAME (AND LIBRARY NAME)
                 token: ui.getGlobalToken(),
                 creds: ui.getCurrentCreds()
             });
@@ -124,13 +294,16 @@ async function checkSyncStatus() {
 
 // --- Push to Launch ---
 async function pushToLaunch() {
-    const properties = ui.getSelectedProperties();
+    // The folder it would push is a library's
+    if (selectedLibrary()) return refuse('Pushing a library sync isn\'t available yet. Choose "Whole property" to push a property.');
+
+    const properties = syncProperties();
     const folder = document.getElementById('sync-folder-path').value;
 
     if (properties.length === 0) return alert("Please select one or more properties from the property list.");
     if (!folder) return alert("Please select a local folder.");
-    
-    document.getElementById('sync-console').innerHTML = '';
+
+    clearLog();
     ui.logSync(`Starting Push to Launch for ${properties.length} properties...`);
 
     for (const property of properties) {
@@ -150,15 +323,90 @@ async function pushToLaunch() {
     }
 }
 
+// --- Test Build ---
+// What the build changed, then where to point Chrome. A build that was stopped
+// wrote nothing, and lists what stopped it.
+function reportTestBuild(property, overridesDir, result) {
+    if (result.stopped) {
+        logLines(property, '⛔ Stopped', result.problems.map(problem => `  ${problem}`));
+        return;
+    }
+    const { replaced, added, dropped, warnings } = result.report;
+    logLines(property, 'Replaced', replaced.map(item => `  [~] ${item}`));
+    logLines(property, 'Added', added.map(item => `  [+] ${item}`));
+    logLines(property, 'Dropped', dropped.map(item => `  [-] ${item}`));
+    logLines(property, '⚠ Warnings', warnings.map(warning => `  ${warning}`));
+    ui.logSync(`[${property.name}] Point Chrome DevTools → Sources → Overrides at ${overridesDir} (overrides apply only while DevTools is open).`);
+}
+
+// One test build at a time: two would log over each other and write the same files at once
+let generating = false;
+
+// Applies the library in the sync folder to production's script, and writes the result to the overrides folder
+async function generateTestBuild() {
+    if (generating) return;
+    generating = true;
+    const button = document.getElementById('test-build-generate');
+    button.disabled = true;
+    try {
+        await buildFromLibrary();
+    } finally {
+        generating = false;
+        button.disabled = false;
+    }
+}
+
+async function buildFromLibrary() {
+    const library = selectedLibrary();
+    const property = propertyForLibrary('Generating a test build');
+    if (!property) return;
+
+    await restoreOverridesFolder();
+    const folder = document.getElementById('sync-folder-path').value;
+    const overridesDir = document.getElementById('test-build-overrides-path').value;
+    if (!library) return refuse('Choose a library first: click Fetch Unpublished Libraries, pick one and download it.');
+    if (!folder) return refuse('Select the local project folder the library was downloaded to.');
+    if (!overridesDir) return refuse('Choose an overrides folder to write the test build to.');
+
+    clearLog();
+    ui.logSync(`[${property.name}] Generating a test build from library ${library.name}...`);
+
+    const offSyncLog = window.api.onSyncLog((msg) => ui.logSync(msg));
+
+    try {
+        const result = await window.api.generateTestBuild({
+            targetDir: syncFolder(folder, property, library),
+            overridesDir,
+            environmentId: document.getElementById('test-build-environment').value,
+            token: ui.getGlobalToken(),
+            creds: ui.getCurrentCreds()
+        });
+        reportTestBuild(property, overridesDir, result);
+    } catch (e) {
+        ui.logSync(`[${property.name}] ❌ Error: ${e.message}`);
+    } finally {
+        offSyncLog();
+    }
+}
+
 // --- Export to window ---
 window.selectSyncFolder = selectSyncFolder;
+window.selectOverridesFolder = selectOverridesFolder;
+window.clearSyncLibraries = clearSyncLibraries;
+window.loadSyncLibraries = loadSyncLibraries;
 window.initSyncDownload = initSyncDownload;
 window.checkSyncStatus = checkSyncStatus;
 window.pushToLaunch = pushToLaunch;
+window.generateTestBuild = generateTestBuild;
 
 export {
     selectSyncFolder,
+    selectOverridesFolder,
+    restoreOverridesFolder,
+    populateSyncProperties,
+    loadSyncLibraries,
     initSyncDownload,
     checkSyncStatus,
-    pushToLaunch
+    pushToLaunch,
+    generateTestBuild
 };
